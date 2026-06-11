@@ -4,30 +4,34 @@ echo ==========================================================
 echo              SENTINELOPS AI LOCAL STARTUP                  
 echo ==========================================================
 
-echo [*] Installing python dependencies for mock services...
-pip install -r simulation/mock-services/requirements.txt
-if %errorlevel% neq 0 (
-    echo [WARNING] Failed to install mock service dependencies. Make sure python is in your PATH.
+if exist .venv goto VENV_EXISTS
+echo [*] Creating Python virtual environment .venv...
+python -m venv .venv
+if errorlevel 1 (
+    echo [ERROR] Failed to create virtual environment. Ensure Python is installed.
+    pause
+    exit /b 1
 )
+:VENV_EXISTS
 
-echo [*] Installing python dependencies for SRE backend...
+
+echo [*] Activating virtual environment and installing dependencies...
+call .venv\Scripts\activate
+pip install -r simulation/mock-services/requirements.txt
 pip install -r backend/requirements.txt
-if %errorlevel% neq 0 (
-    echo [WARNING] Failed to install SRE backend dependencies.
-)
 
 echo [*] Launching simulated microservice cluster...
-start /min "SentinelOps: Notification Service" cmd /c "set SERVICE_NAME=notification-service&&set PORT=8005&&python simulation/mock-services/app.py"
-start /min "SentinelOps: Payment Service" cmd /c "set SERVICE_NAME=payment-service&&set PORT=8004&&set DOWNSTREAM_URLS=http://localhost:8005&&python simulation/mock-services/app.py"
-start /min "SentinelOps: Order Service" cmd /c "set SERVICE_NAME=order-service&&set PORT=8003&&set DOWNSTREAM_URLS=http://localhost:8004&&python simulation/mock-services/app.py"
-start /min "SentinelOps: User Service" cmd /c "set SERVICE_NAME=user-service&&set PORT=8002&&python simulation/mock-services/app.py"
-start /min "SentinelOps: API Gateway" cmd /c "set SERVICE_NAME=api-gateway&&set PORT=8001&&set DOWNSTREAM_URLS=http://localhost:8002,http://localhost:8003&&python simulation/mock-services/app.py"
+start /min "SentinelOps: Notification Service" cmd /c "set SERVICE_NAME=notification-service&&set PORT=8005&&.venv\Scripts\python.exe simulation/mock-services/app.py"
+start /min "SentinelOps: Payment Service" cmd /c "set SERVICE_NAME=payment-service&&set PORT=8004&&set DOWNSTREAM_URLS=http://localhost:8005&&.venv\Scripts\python.exe simulation/mock-services/app.py"
+start /min "SentinelOps: Order Service" cmd /c "set SERVICE_NAME=order-service&&set PORT=8003&&set DOWNSTREAM_URLS=http://localhost:8004&&.venv\Scripts\python.exe simulation/mock-services/app.py"
+start /min "SentinelOps: User Service" cmd /c "set SERVICE_NAME=user-service&&set PORT=8002&&.venv\Scripts\python.exe simulation/mock-services/app.py"
+start /min "SentinelOps: API Gateway" cmd /c "set SERVICE_NAME=api-gateway&&set PORT=8001&&set DOWNSTREAM_URLS=http://localhost:8002,http://localhost:8003&&.venv\Scripts\python.exe simulation/mock-services/app.py"
 
 echo [+] Mock cluster running (api-gateway:8001, user:8002, order:8003, payment:8004, notification:8005)
 
 echo [*] Launching FastAPI SRE Backend...
 cd backend
-start "SentinelOps: FastAPI SRE Agent" cmd /c "set DATABASE_URL=sqlite:///./sentinelops.db&&set OLLAMA_HOST=http://localhost:11434&&python -m uvicorn app.main:app --host 0.0.0.0 --port 8000"
+start "SentinelOps: FastAPI SRE Agent" cmd /c "set DATABASE_URL=sqlite:///./sentinelops.db&&set OLLAMA_HOST=http://localhost:11434&&..\.venv\Scripts\python.exe -m uvicorn app.main:app --host 0.0.0.0 --port 8000"
 cd ..
 
 echo [+] FastAPI backend is starting...

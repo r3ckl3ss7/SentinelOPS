@@ -65,12 +65,11 @@ def get_container_logs(service_name: str, lines: int = 50) -> str:
 
 @tool
 def get_service_metrics(service_name: str) -> str:
-    """Queries Prometheus or container stats for CPU and Memory usage of the target service."""
+    """Queries Prometheus, the service directly, or container stats for CPU and Memory usage of the target service."""
     logger.info(f"Tool execution: get_service_metrics for {service_name}")
     
-    # Try querying Prometheus
+    # Try querying Prometheus first
     try:
-        # Standard Prometheus query
         mem_query = f'service_memory_usage_bytes{{job="sentinel-services"}}'
         cpu_query = f'service_cpu_usage_ratio{{job="sentinel-services"}}'
         
@@ -79,20 +78,16 @@ def get_service_metrics(service_name: str) -> str:
         
         result_str = f"Service: {service_name}\n"
         
-        # Parse memory
         mem_val = "N/A"
         if mem_resp.status_code == 200:
             data = mem_resp.json().get("data", {}).get("result", [])
             for r in data:
-                # Scrape instance/job name
                 metric = r.get("metric", {})
-                # Try matching instance or job
                 if service_name in metric.get("instance", "") or service_name in metric.get("job", ""):
                     bytes_val = float(r.get("value", [0, 0])[1])
                     mem_val = f"{bytes_val / (1024*1024):.2f} MB"
         result_str += f"Memory Usage: {mem_val}\n"
         
-        # Parse CPU
         cpu_val = "N/A"
         if cpu_resp.status_code == 200:
             data = cpu_resp.json().get("data", {}).get("result", [])
@@ -103,26 +98,55 @@ def get_service_metrics(service_name: str) -> str:
                     cpu_val = f"{ratio_val * 100:.1f}%"
         result_str += f"CPU Usage: {cpu_val}\n"
         
-        # If Prometheus has valid values, return them
         if mem_val != "N/A" or cpu_val != "N/A":
             return result_str
             
     except Exception as e:
-        logger.warning(f"Could not fetch metrics from Prometheus: {str(e)}. Trying Direct/Mock.")
+        logger.warning(f"Could not fetch metrics from Prometheus: {str(e)}. Trying direct service scrape.")
+
+    # Try scraping the service's own /metrics endpoint directly (works in local mode)
+    from app.tools import LOCAL_PORTS
+    service_urls = [f"http://{service_name}:8000"]
+    local_port = LOCAL_PORTS.get(service_name)
+    if local_port:
+        service_urls.append(f"http://localhost:{local_port}")
+    
+    for base_url in service_urls:
+        try:
+            resp = requests.get(f"{base_url}/metrics", timeout=1.0)
+            if resp.status_code == 200:
+                memory_mb = 0.0
+                cpu_ratio = 0.0
+                for line in resp.text.split("\n"):
+                    if line.startswith("service_memory_usage_bytes") and not line.startswith("#"):
+                        try:
+                            memory_mb = float(line.split()[1]) / (1024 * 1024)
+                        except (ValueError, IndexError):
+                            pass
+                    elif line.startswith("service_cpu_usage_ratio") and not line.startswith("#"):
+                        try:
+                            cpu_ratio = float(line.split()[1])
+                        except (ValueError, IndexError):
+                            pass
+                return (
+                    f"Service: {service_name}\n"
+                    f"Memory Usage: {memory_mb:.2f} MB\n"
+                    f"CPU Usage: {cpu_ratio * 100:.1f}%"
+                )
+        except Exception:
+            continue
 
     # Try Docker stats
     container = get_container_by_name(service_name)
     if container:
         try:
             stats = container.stats(stream=False)
-            # Calculate CPU
             cpu_delta = stats['cpu_stats']['cpu_usage']['total_usage'] - stats['precpu_stats']['cpu_usage']['total_usage']
             system_delta = stats['cpu_stats']['system_cpu_usage'] - stats['precpu_stats']['system_cpu_usage']
             cpu_percent = 0.0
             if system_delta > 0.0 and cpu_delta > 0.0:
                 cpu_percent = (cpu_delta / system_delta) * len(stats['cpu_stats']['cpu_usage']['percpu_usage']) * 100.0
             
-            # Memory
             mem_bytes = stats['memory_stats']['usage']
             return (
                 f"Service: {service_name}\n"
@@ -132,12 +156,8 @@ def get_service_metrics(service_name: str) -> str:
         except Exception as e:
             logger.error(f"Error querying docker stats: {str(e)}")
 
-    # Fallback/Mock for local testing
-    if "payment" in service_name:
-        return f"Service: {service_name}\nMemory Usage: 104.5 MB (High, limit is 80MB)\nCPU Usage: 22.1%"
-    elif "order" in service_name:
-        return f"Service: {service_name}\nMemory Usage: 22.4 MB\nCPU Usage: 15.0%"
-    return f"Service: {service_name}\nMemory Usage: 20.1 MB\nCPU Usage: 5.0%"
+    # Last-resort fallback (should rarely be reached now)
+    return f"Service: {service_name}\nMemory Usage: N/A\nCPU Usage: N/A"
 
 LOCAL_PORTS = {
     "api-gateway": 8001,

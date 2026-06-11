@@ -227,35 +227,41 @@ def verify_node(state: AgentState) -> AgentState:
     metrics = get_service_metrics.invoke({"service_name": service})
     log_step(incident_id, f"Result: Service metrics:\n{metrics}", "AGENT_RESULT")
     
-    # 2. Evaluate Recovery
+    # 2. Evaluate Recovery — use both heuristics AND LLM
     success = False
     log_step(incident_id, "Thought: Evaluating if system has recovered...", "AGENT_THOUGHT")
     
-    prompt = (
-        f"You are an SRE AI Agent verifying if an incident is resolved.\n"
-        f"Service: {service}\n\n"
-        f"--- POST-REMEDIATION TELEMETRY ---\n"
-        f"Health check:\n{health}\n\n"
-        f"Metrics:\n{metrics}\n"
-        f"----------------------------------\n\n"
-        f"Is the service recovered? Answer with 'YES' if health is 200 OK and metrics are normal. Otherwise answer 'NO'.\n"
-        f"Response (YES/NO):"
-    )
-    
+    # Heuristic check (always runs — this is the ground truth)
+    health_ok = "Status: 200" in health or '"status": "healthy"' in health or '"status":"healthy"' in health
+    if health_ok:
+        log_step(incident_id, "Heuristic: Health endpoint returned 200 OK.", "AGENT_THOUGHT")
+        success = True
+    else:
+        log_step(incident_id, "Heuristic: Health endpoint did NOT return 200 OK.", "AGENT_THOUGHT")
+
+    # LLM check (supplementary — can override a negative heuristic, but not a positive one)
     try:
+        prompt = (
+            f"You are an SRE AI Agent verifying if an incident is resolved.\n"
+            f"Service: {service}\n\n"
+            f"--- POST-REMEDIATION TELEMETRY ---\n"
+            f"Health check:\n{health}\n\n"
+            f"Metrics:\n{metrics}\n"
+            f"----------------------------------\n\n"
+            f"Is the service recovered? Answer with 'YES' if health is 200 OK and metrics are normal. Otherwise answer 'NO'.\n"
+            f"Response (YES/NO):"
+        )
         response = llm.invoke([
             SystemMessage(content="You are an SRE checking service recovery. Answer YES or NO."),
             HumanMessage(content=prompt)
         ])
         content = response.content.strip().upper()
-        log_step(incident_id, f"Recovery Evaluation: {content}", "AGENT_THOUGHT")
+        log_step(incident_id, f"LLM Recovery Evaluation: {content}", "AGENT_THOUGHT")
         if "YES" in content:
             success = True
     except Exception as e:
         logger.error(f"LLM Recovery Check failed: {str(e)}")
-        # Heuristics check
-        if "Status: 200" in health or '"status": "healthy"' in health:
-            success = True
+        log_step(incident_id, f"LLM unavailable for verification, relying on heuristics.", "WARNING")
             
     if success:
         log_step(incident_id, "System recovery verified. All metrics stable.", "INFO")
@@ -278,14 +284,14 @@ def report_node(state: AgentState) -> AgentState:
     
     log_step(incident_id, "Compiling incident report...", "INFO")
     
-    # Calculate resolution time (simple mock value based on steps)
-    resolution_time = 42.0 if success else 120.0
-    
-    # DB update for incident resolution
+    # Calculate real resolution time from incident creation
+    resolution_time = 60.0  # fallback
     db = SessionLocal()
     try:
         incident = db.query(Incident).filter(Incident.id == incident_id).first()
         if incident:
+            delta = datetime.utcnow() - incident.created_at
+            resolution_time = round(delta.total_seconds(), 1)
             incident.status = "RESOLVED" if success else "FAILED"
             incident.resolution_time_seconds = resolution_time
             db.commit()

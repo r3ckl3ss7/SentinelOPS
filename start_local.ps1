@@ -5,45 +5,48 @@ Write-Host "==========================================================" -Foregro
 Write-Host "             SENTINELOPS AI LOCAL STARTUP                  " -ForegroundColor Cyan
 Write-Host "==========================================================" -ForegroundColor Cyan
 
-# 1. Install mock services dependencies
-Write-Host "[*] Installing Python dependencies for mock services..." -ForegroundColor Yellow
-pip install -r simulation/mock-services/requirements.txt
+# 1. Create Python virtual environment if it doesn't exist
+if (-not (Test-Path ".venv")) {
+    Write-Host "[*] Creating Python virtual environment (.venv)..." -ForegroundColor Yellow
+    Start-Process python -ArgumentList "-m venv .venv" -NoNewWindow -Wait
+}
 
-# 2. Install backend dependencies
-Write-Host "[*] Installing Python dependencies for backend SRE agent..." -ForegroundColor Yellow
-pip install -r backend/requirements.txt
+# 2. Install dependencies in virtual environment
+Write-Host "[*] Upgrading pip and installing Python dependencies..." -ForegroundColor Yellow
+Start-Process .venv/Scripts/pip -ArgumentList "install --upgrade pip" -NoNewWindow -Wait
+Start-Process .venv/Scripts/pip -ArgumentList "install -r simulation/mock-services/requirements.txt -r backend/requirements.txt" -NoNewWindow -Wait
 
 # 3. Start Mock Services in background
 Write-Host "[*] Launching simulated microservice cluster on localhost..." -ForegroundColor Yellow
 
 # Notification Service (Port 8005)
-Start-Process python -ArgumentList "simulation/mock-services/app.py" -Environment @{
+Start-Process .venv/Scripts/python.exe -ArgumentList "simulation/mock-services/app.py" -Environment @{
     SERVICE_NAME = "notification-service"
     PORT = "8005"
 } -WindowStyle Minimized
 
 # Payment Service (Port 8004)
-Start-Process python -ArgumentList "simulation/mock-services/app.py" -Environment @{
+Start-Process .venv/Scripts/python.exe -ArgumentList "simulation/mock-services/app.py" -Environment @{
     SERVICE_NAME = "payment-service"
     PORT = "8004"
     DOWNSTREAM_URLS = "http://localhost:8005"
 } -WindowStyle Minimized
 
 # Order Service (Port 8003)
-Start-Process python -ArgumentList "simulation/mock-services/app.py" -Environment @{
+Start-Process .venv/Scripts/python.exe -ArgumentList "simulation/mock-services/app.py" -Environment @{
     SERVICE_NAME = "order-service"
     PORT = "8003"
     DOWNSTREAM_URLS = "http://localhost:8004"
 } -WindowStyle Minimized
 
 # User Service (Port 8002)
-Start-Process python -ArgumentList "simulation/mock-services/app.py" -Environment @{
+Start-Process .venv/Scripts/python.exe -ArgumentList "simulation/mock-services/app.py" -Environment @{
     SERVICE_NAME = "user-service"
     PORT = "8002"
 } -WindowStyle Minimized
 
 # API Gateway (Port 8001)
-Start-Process python -ArgumentList "simulation/mock-services/app.py" -Environment @{
+Start-Process .venv/Scripts/python.exe -ArgumentList "simulation/mock-services/app.py" -Environment @{
     SERVICE_NAME = "api-gateway"
     PORT = "8001"
     DOWNSTREAM_URLS = "http://localhost:8002,http://localhost:8003"
@@ -53,7 +56,7 @@ Write-Host "[+] Mock services running (api-gateway:8001, user:8002, order:8003, 
 
 # 4. Start FastAPI Backend (Port 8000)
 Write-Host "[*] Launching FastAPI Backend on Port 8000..." -ForegroundColor Yellow
-Start-Process python -ArgumentList "-m uvicorn app.main:app --host 0.0.0.0 --port 8000" -WorkingDirectory "backend" -Environment @{
+Start-Process ../.venv/Scripts/python.exe -ArgumentList "-m uvicorn app.main:app --host 0.0.0.0 --port 8000" -WorkingDirectory "backend" -Environment @{
     DATABASE_URL = "sqlite:///./sentinelops.db"
     OLLAMA_HOST = "http://localhost:11434"
 } -WindowStyle Normal

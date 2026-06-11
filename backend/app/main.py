@@ -1,6 +1,8 @@
 import os
 import uuid
+import time
 import logging
+import threading
 from typing import Dict, Any, List
 from datetime import datetime
 
@@ -10,7 +12,7 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 import requests
 
-from app.database import init_db, get_db, Incident, IncidentLog
+from app.database import init_db, get_db, SessionLocal, Incident, IncidentLog
 from app.agent import agent_app, log_step
 
 # Logging setup
@@ -28,12 +30,141 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Initialize database on startup
+# ── Built-in Health Monitor ──────────────────────────────────────────────
+# Replaces Prometheus + AlertManager when they are not available (local dev).
+# Polls every service every 5 seconds for anomalies and triggers the agent.
+
+MONITOR_INTERVAL = 5  # seconds
+MEMORY_THRESHOLD_MB = 50.0  # trigger alert above this
+CPU_THRESHOLD = 0.80  # trigger alert above this
+
+# Will be populated after LOCAL_PORTS is defined further below
+_monitor_thread = None
+
+def _has_active_incident(db, service_name: str, alert_name: str) -> bool:
+    """Check if there is already an active incident for this service/alert."""
+    return db.query(Incident).filter(
+        Incident.service == service_name,
+        Incident.alert_name == alert_name,
+        Incident.status.in_(["INVESTIGATING", "ROOT_CAUSE_FOUND", "EXECUTING_FIX", "VERIFYING"])
+    ).first() is not None
+
+def _create_and_run_incident(service_name: str, alert_name: str, severity: str):
+    """Create an incident record and run the agent workflow synchronously."""
+    db = SessionLocal()
+    try:
+        # Double-check dedup inside the monitor thread
+        if _has_active_incident(db, service_name, alert_name):
+            return
+
+        incident_id = f"INC-{datetime.utcnow().strftime('%Y%m%d')}-{str(uuid.uuid4())[:8].upper()}"
+        new_incident = Incident(
+            id=incident_id,
+            service=service_name,
+            alert_name=alert_name,
+            severity=severity,
+            status="INVESTIGATING",
+            created_at=datetime.utcnow()
+        )
+        db.add(new_incident)
+        db.commit()
+
+        log_entry = IncidentLog(
+            incident_id=incident_id,
+            level="WARNING",
+            message=f"[HealthMonitor] Alert '{alert_name}' (severity: {severity}) auto-detected on service '{service_name}'",
+            timestamp=datetime.utcnow()
+        )
+        db.add(log_entry)
+        db.commit()
+    except Exception as e:
+        logger.error(f"Monitor: failed to create incident: {e}")
+        return
+    finally:
+        db.close()
+
+    logger.info(f"Monitor: triggering agent workflow for {incident_id}")
+    try:
+        run_agent_workflow(incident_id, service_name, alert_name)
+    except Exception as e:
+        logger.error(f"Monitor: agent workflow crashed for {incident_id}: {e}")
+
+def _health_monitor_loop():
+    """Background thread that continuously polls services for anomalies."""
+    # Wait a few seconds for services to come online
+    time.sleep(8)
+    logger.info("Background health monitor started – polling every %ds", MONITOR_INTERVAL)
+
+    while True:
+        try:
+            for service_name, port in LOCAL_PORTS.items():
+                url = get_service_url(service_name)
+                try:
+                    # ── Check metrics ────────────────────────────────
+                    memory_mb = 0.0
+                    cpu = 0.0
+                    metric_resp = requests.get(f"{url}/metrics", timeout=0.8)
+                    if metric_resp.status_code == 200:
+                        for line in metric_resp.text.split("\n"):
+                            if line.startswith("service_memory_usage_bytes") and not line.startswith("#"):
+                                try:
+                                    memory_mb = float(line.split()[1]) / (1024 * 1024)
+                                except (ValueError, IndexError):
+                                    pass
+                            elif line.startswith("service_cpu_usage_ratio") and not line.startswith("#"):
+                                try:
+                                    cpu = float(line.split()[1])
+                                except (ValueError, IndexError):
+                                    pass
+
+                    # ── Check health ─────────────────────────────────
+                    health_ok = False
+                    try:
+                        health_resp = requests.get(f"{url}/health", timeout=0.8)
+                        health_ok = health_resp.status_code == 200
+                    except Exception:
+                        pass
+
+                    # ── Decide if alert should fire ──────────────────
+                    if memory_mb > MEMORY_THRESHOLD_MB:
+                        alert_name = "HighMemoryUsage"
+                        severity = "critical"
+                    elif cpu > CPU_THRESHOLD:
+                        alert_name = "HighCpuUsage"
+                        severity = "warning"
+                    elif not health_ok:
+                        alert_name = "HttpErrorSpike"
+                        severity = "critical"
+                    else:
+                        continue  # service is healthy, move on
+
+                    # Fire in a separate thread so monitor keeps polling
+                    threading.Thread(
+                        target=_create_and_run_incident,
+                        args=(service_name, alert_name, severity),
+                        daemon=True
+                    ).start()
+
+                except Exception as e:
+                    # Service unreachable – skip it silently
+                    pass
+        except Exception as e:
+            logger.error(f"Monitor loop error: {e}")
+
+        time.sleep(MONITOR_INTERVAL)
+
+# Initialize database on startup and launch the health monitor
 @app.on_event("startup")
 def startup_event():
+    global _monitor_thread
     logger.info("Initializing database...")
     init_db()
     logger.info("Database initialized.")
+
+    # Start background health monitor thread
+    _monitor_thread = threading.Thread(target=_health_monitor_loop, daemon=True)
+    _monitor_thread.start()
+    logger.info("Background health monitor thread launched.")
 
 # Pydantic Schemas
 class FaultInjectionRequest(BaseModel):
