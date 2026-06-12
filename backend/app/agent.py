@@ -37,7 +37,7 @@ try:
         api_key="ollama",  # Ollama doesn't validate keys
         model="qwen2.5:3b",
         temperature=0.0,
-        timeout=15.0
+        timeout=120.0
     )
     logger.info(f"LLM initialized pointing to {base_url} using model qwen2.5:3b")
 except Exception as e:
