@@ -18,7 +18,10 @@ import {
   ArrowRight,
   Download,
   AlertOctagon,
-  Clock
+  Clock,
+  Shield,
+  Target,
+  Zap
 } from "lucide-react";
 
 // Get API base URL
@@ -39,6 +42,11 @@ interface Incident {
   status: "INVESTIGATING" | "ROOT_CAUSE_FOUND" | "EXECUTING_FIX" | "VERIFYING" | "RESOLVED" | "FAILED";
   severity: string;
   root_cause?: string;
+  confidence?: number;           // 0-100 from RCA
+  risk_level?: string;           // LOW / MEDIUM / HIGH
+  evidence?: string;             // JSON string: list of evidence items
+  affected_services?: string;    // JSON string: list of service names
+  reasoning_summary?: string;    // LLM reasoning narrative
   resolution_action?: string;
   resolution_time_seconds?: number;
   created_at: string;
@@ -180,6 +188,26 @@ export default function Home() {
       return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
     } catch {
       return isoString;
+    }
+  };
+
+  // Parse JSON string fields from the backend (evidence, affected_services)
+  const parseJsonField = (jsonStr?: string): string[] => {
+    if (!jsonStr) return [];
+    try {
+      const parsed = JSON.parse(jsonStr);
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return [];
+    }
+  };
+
+  const getRiskColor = (risk?: string) => {
+    switch (risk?.toUpperCase()) {
+      case "HIGH": return { border: "border-red-500", bg: "bg-red-950/30", text: "text-red-400" };
+      case "MEDIUM": return { border: "border-amber-500", bg: "bg-amber-950/30", text: "text-amber-400" };
+      case "LOW": return { border: "border-emerald-500", bg: "bg-emerald-950/30", text: "text-emerald-400" };
+      default: return { border: "border-slate-600", bg: "bg-slate-900/30", text: "text-slate-400" };
     }
   };
 
@@ -477,6 +505,72 @@ export default function Home() {
                       <div>Time to Resolve: <span className="text-white font-semibold">{selectedIncident.resolution_time_seconds}s</span></div>
                     )}
                   </div>
+
+                  {/* Confidence & Risk Row */}
+                  {(selectedIncident.confidence !== undefined && selectedIncident.confidence !== null) && (
+                    <div className="pt-2 border-t border-slate-800 flex items-center gap-4">
+                      {/* Confidence Gauge */}
+                      <div className="flex items-center gap-2 flex-1">
+                        <Target className="h-3.5 w-3.5 text-cyan-400 shrink-0" />
+                        <span className="text-slate-400 text-[11px] shrink-0">Confidence</span>
+                        <div className="flex-1 bg-slate-800 h-2 rounded-full overflow-hidden">
+                          <div
+                            className={`h-full rounded-full transition-all duration-500 ${
+                              selectedIncident.confidence >= 80 ? "bg-emerald-500" :
+                              selectedIncident.confidence >= 50 ? "bg-amber-500" : "bg-red-500"
+                            }`}
+                            style={{ width: `${Math.min(selectedIncident.confidence, 100)}%` }}
+                          ></div>
+                        </div>
+                        <span className="font-mono text-white font-semibold text-[11px] shrink-0">{selectedIncident.confidence}%</span>
+                      </div>
+
+                      {/* Risk Level Badge */}
+                      {selectedIncident.risk_level && (() => {
+                        const rc = getRiskColor(selectedIncident.risk_level);
+                        return (
+                          <div className={`flex items-center gap-1 px-2 py-0.5 rounded border ${rc.border} ${rc.bg}`}>
+                            <Shield className={`h-3 w-3 ${rc.text}`} />
+                            <span className={`font-semibold text-[10px] uppercase tracking-wider ${rc.text}`}>{selectedIncident.risk_level}</span>
+                          </div>
+                        );
+                      })()}
+                    </div>
+                  )}
+
+                  {/* Evidence List */}
+                  {(() => {
+                    const evidenceItems = parseJsonField(selectedIncident.evidence);
+                    return evidenceItems.length > 0 ? (
+                      <div className="pt-2 border-t border-slate-800">
+                        <div className="text-[10px] uppercase tracking-wider text-slate-500 mb-1 flex items-center gap-1">
+                          <Zap className="h-3 w-3 text-amber-400" />
+                          Evidence
+                        </div>
+                        <ul className="space-y-0.5">
+                          {evidenceItems.map((e, i) => (
+                            <li key={i} className="text-[11px] text-slate-300 pl-3 relative before:content-['▸'] before:absolute before:left-0 before:text-amber-500 before:text-[10px]">{e}</li>
+                          ))}
+                        </ul>
+                      </div>
+                    ) : null;
+                  })()}
+
+                  {/* Blast Radius */}
+                  {(() => {
+                    const affectedItems = parseJsonField(selectedIncident.affected_services);
+                    return affectedItems.length > 0 ? (
+                      <div className="pt-2 border-t border-slate-800">
+                        <div className="text-[10px] uppercase tracking-wider text-slate-500 mb-1">Blast Radius</div>
+                        <div className="flex flex-wrap gap-1.5">
+                          {affectedItems.map((svc, i) => (
+                            <span key={i} className="px-1.5 py-0.5 text-[10px] font-mono rounded border border-slate-700 bg-slate-800/50 text-slate-300">{svc}</span>
+                          ))}
+                        </div>
+                      </div>
+                    ) : null;
+                  })()}
+
                   {selectedIncident.root_cause && (
                     <div className="pt-2 border-t border-slate-800 text-[11px] text-slate-300">
                       <strong className="text-slate-400">Diagnosed Root Cause:</strong><br />

@@ -25,6 +25,11 @@ class Incident(Base):
     status = Column(String, default="INVESTIGATING") # INVESTIGATING, EXECUTING_FIX, VERIFYING, RESOLVED, FAILED
     severity = Column(String)
     root_cause = Column(Text, nullable=True)
+    confidence = Column(Integer, nullable=True)          # 0-100 confidence score from RCA
+    risk_level = Column(String, nullable=True)            # LOW / MEDIUM / HIGH
+    evidence = Column(Text, nullable=True)                # JSON string: list of evidence items
+    affected_services = Column(Text, nullable=True)       # JSON string: list of service names
+    reasoning_summary = Column(Text, nullable=True)       # LLM reasoning narrative
     resolution_action = Column(Text, nullable=True)
     resolution_time_seconds = Column(Float, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
