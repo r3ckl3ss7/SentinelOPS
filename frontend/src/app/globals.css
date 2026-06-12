@@ -1,12 +1,59 @@
 @import "tailwindcss";
 
+@theme {
+  --font-sans: var(--font-inter), system-ui, sans-serif;
+  --font-heading: var(--font-outfit), system-ui, sans-serif;
+}
+
 :root {
-  --background: #090d16;
-  --foreground: #f8fafc;
+  --background: #f8fafc;
+  --foreground: #0f172a;
 }
 
 body {
   background: var(--background);
   color: var(--foreground);
-  font-family: var(--font-sans), system-ui, sans-serif;
+  font-family: var(--font-sans);
+}
+
+/* Custom animations and gradient utilities matching the template */
+.gradient-text {
+  background: linear-gradient(135deg, #0942e6 0%, #00d2d3 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+.gradient-btn {
+  background: linear-gradient(to right, #0942e6 0%, #00d2d3 100%);
+  box-shadow: 0 10px 20px rgba(9, 66, 230, 0.15);
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.gradient-btn:hover {
+  box-shadow: 0 12px 24px rgba(9, 66, 230, 0.25);
+  transform: translateY(-1px);
+}
+
+.glass-card {
+  background: rgba(255, 255, 255, 0.85);
+  backdrop-filter: blur(16px);
+  border: 1px solid rgba(226, 232, 240, 0.8);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.03);
+}
+
+.pulse-glow {
+  box-shadow: 0 0 15px rgba(9, 66, 230, 0.2);
+  animation: pulse-shadow 2.5s infinite;
+}
+
+@keyframes pulse-shadow {
+  0% {
+    box-shadow: 0 0 15px rgba(9, 66, 230, 0.2);
+  }
+  50% {
+    box-shadow: 0 0 25px rgba(9, 66, 230, 0.4);
+  }
+  100% {
+    box-shadow: 0 0 15px rgba(9, 66, 230, 0.2);
+  }
 }

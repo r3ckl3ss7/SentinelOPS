@@ -21,7 +21,13 @@ import {
   Clock,
   Shield,
   Target,
-  Zap
+  Zap,
+  Menu,
+  ChevronRight,
+  ExternalLink,
+  User,
+  Rocket,
+  Settings
 } from "lucide-react";
 
 // Get API base URL
@@ -71,7 +77,7 @@ export default function Home() {
   const [clearingFaults, setClearingFaults] = useState(false);
   const [filterActive, setFilterActive] = useState(false);
 
-  const logsEndRef = useRef<HTMLDivElement>(null);
+  const consoleRef = useRef<HTMLDivElement>(null);
 
   // Poll service status and incident list
   useEffect(() => {
@@ -137,10 +143,10 @@ export default function Home() {
     return () => clearInterval(logInterval);
   }, [selectedIncidentId]);
 
-  // Auto-scroll logs terminal
+  // Auto-scroll logs terminal container only (does not scroll the main window)
   useEffect(() => {
-    if (logsEndRef.current) {
-      logsEndRef.current.scrollIntoView({ behavior: "smooth" });
+    if (consoleRef.current) {
+      consoleRef.current.scrollTop = consoleRef.current.scrollHeight;
     }
   }, [logs]);
 
@@ -181,6 +187,22 @@ export default function Home() {
     }
   };
 
+  // Trigger demo simulation and scroll down
+  const startDemo = async () => {
+    // Auto inject memory leak to payment-service to spin up the SRE flow
+    await injectFault("payment-service", "memory-leak");
+    
+    // Smooth scroll to operations center
+    const opsCenter = document.getElementById("ops-center");
+    if (opsCenter) {
+      opsCenter.scrollIntoView({ behavior: "smooth" });
+    }
+  };
+
+  const scrollToTop = () => {
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  };
+
   // Helper to format timestamps
   const formatTime = (isoString: string) => {
     try {
@@ -191,7 +213,7 @@ export default function Home() {
     }
   };
 
-  // Parse JSON string fields from the backend (evidence, affected_services)
+  // Parse JSON string fields from the backend
   const parseJsonField = (jsonStr?: string): string[] => {
     if (!jsonStr) return [];
     try {
@@ -204,35 +226,35 @@ export default function Home() {
 
   const getRiskColor = (risk?: string) => {
     switch (risk?.toUpperCase()) {
-      case "HIGH": return { border: "border-red-500", bg: "bg-red-950/30", text: "text-red-400" };
-      case "MEDIUM": return { border: "border-amber-500", bg: "bg-amber-950/30", text: "text-amber-400" };
-      case "LOW": return { border: "border-emerald-500", bg: "bg-emerald-950/30", text: "text-emerald-400" };
-      default: return { border: "border-slate-600", bg: "bg-slate-900/30", text: "text-slate-400" };
+      case "HIGH": return { border: "border-red-200", bg: "bg-red-50", text: "text-red-600" };
+      case "MEDIUM": return { border: "border-amber-200", bg: "bg-amber-50", text: "text-amber-700" };
+      case "LOW": return { border: "border-emerald-200", bg: "bg-emerald-50", text: "text-emerald-700" };
+      default: return { border: "border-slate-200", bg: "bg-slate-50", text: "text-slate-600" };
     }
   };
 
   const getStatusColor = (status: string) => {
     switch (status) {
-      case "healthy": return "text-emerald-400 border-emerald-500 bg-emerald-950/20";
-      case "unhealthy": return "text-red-400 border-red-500 bg-red-950/20";
-      default: return "text-amber-500 border-amber-600 bg-amber-950/10";
+      case "healthy": return "text-emerald-600 border-emerald-100 bg-emerald-50";
+      case "unhealthy": return "text-red-600 border-red-100 bg-red-50";
+      default: return "text-slate-500 border-slate-100 bg-slate-50";
     }
   };
 
   const getIncidentStatusBadge = (status: string) => {
     switch (status) {
       case "INVESTIGATING":
-        return <span className="px-2 py-0.5 text-xs font-semibold rounded-md border border-purple-500 bg-purple-950/30 text-purple-400 animate-pulse">INVESTIGATING</span>;
+        return <span className="px-2 py-0.5 text-[10px] font-bold tracking-wider rounded border border-purple-200 bg-purple-50 text-purple-600 animate-pulse">INVESTIGATING</span>;
       case "ROOT_CAUSE_FOUND":
-        return <span className="px-2 py-0.5 text-xs font-semibold rounded-md border border-indigo-500 bg-indigo-950/30 text-indigo-400 animate-pulse">DIAGNOSING</span>;
+        return <span className="px-2 py-0.5 text-[10px] font-bold tracking-wider rounded border border-indigo-200 bg-indigo-50 text-indigo-600 animate-pulse">DIAGNOSING</span>;
       case "EXECUTING_FIX":
-        return <span className="px-2 py-0.5 text-xs font-semibold rounded-md border border-amber-500 bg-amber-950/30 text-amber-400 animate-pulse">REMEDIATING</span>;
+        return <span className="px-2 py-0.5 text-[10px] font-bold tracking-wider rounded border border-amber-200 bg-amber-50 text-amber-600 animate-pulse">REMEDIATING</span>;
       case "VERIFYING":
-        return <span className="px-2 py-0.5 text-xs font-semibold rounded-md border border-cyan-500 bg-cyan-950/30 text-cyan-400 animate-pulse">VERIFYING</span>;
+        return <span className="px-2 py-0.5 text-[10px] font-bold tracking-wider rounded border border-cyan-200 bg-cyan-50 text-cyan-600 animate-pulse">VERIFYING</span>;
       case "RESOLVED":
-        return <span className="px-2 py-0.5 text-xs font-semibold rounded-md border border-emerald-500 bg-emerald-950/30 text-emerald-400">RESOLVED</span>;
+        return <span className="px-2 py-0.5 text-[10px] font-bold tracking-wider rounded border border-emerald-200 bg-emerald-50 text-emerald-600">RESOLVED</span>;
       default:
-        return <span className="px-2 py-0.5 text-xs font-semibold rounded-md border border-red-500 bg-red-950/30 text-red-400">FAILED</span>;
+        return <span className="px-2 py-0.5 text-[10px] font-bold tracking-wider rounded border border-red-200 bg-red-50 text-red-600">FAILED</span>;
     }
   };
 
@@ -243,13 +265,13 @@ export default function Home() {
       case "AGENT_ACTION":
         return "text-amber-400 font-semibold font-mono";
       case "AGENT_RESULT":
-        return "text-slate-300 font-mono bg-slate-900/50 p-2 rounded border border-slate-800 my-1 block whitespace-pre-wrap text-xs";
+        return "text-slate-300 font-mono bg-slate-900/60 p-2.5 rounded border border-slate-800 my-1.5 block whitespace-pre-wrap text-[11px]";
       case "ERROR":
         return "text-red-400 font-semibold font-mono animate-pulse";
       case "WARNING":
-        return "text-amber-500 font-mono";
+        return "text-amber-400 font-mono";
       default:
-        return "text-slate-400 font-mono";
+        return "text-slate-300 font-mono";
     }
   };
 
@@ -262,219 +284,278 @@ export default function Home() {
     : incidents;
 
   return (
-    <div className="flex-1 bg-[#090d16] text-slate-100 flex flex-col font-sans">
+    <div className="relative min-h-screen bg-[#f8fafc] text-slate-800 flex flex-col font-sans overflow-x-hidden">
       
+      {/* Decorative Background Shapes matching the template */}
+      <div className="absolute top-0 left-0 w-[500px] h-[500px] rounded-full bg-gradient-to-br from-blue-100/30 via-cyan-50/20 to-transparent blur-3xl pointer-events-none -z-10" />
+      <div className="absolute top-[-100px] right-[-100px] w-[450px] h-[450px] rounded-full bg-gradient-to-br from-[#0942e6] to-[#0033cc] opacity-[0.95] pointer-events-none -z-10 shadow-2xl" />
+      <div className="absolute top-[35%] right-[-150px] w-[350px] h-[350px] rounded-full border-[45px] border-[#00d2d3]/25 pointer-events-none -z-10" />
+      <div className="absolute bottom-[20%] left-[-150px] w-[450px] h-[450px] rounded-full bg-cyan-100/30 blur-3xl pointer-events-none -z-10" />
+
       {/* Top Navbar */}
-      <header className="border-b border-slate-800 bg-[#0c1220] px-6 py-4 flex items-center justify-between shadow-lg backdrop-blur-md sticky top-0 z-50">
+      <header className="border-b border-slate-100/80 bg-white/70 backdrop-blur-md px-8 py-4 flex items-center justify-between sticky top-0 z-50">
         <div className="flex items-center space-x-3">
-          <div className="p-2 rounded-lg bg-indigo-600/20 border border-indigo-500/30 text-indigo-400">
+          <div className="p-2 rounded-lg bg-blue-600/10 border border-blue-600/20 text-blue-600">
             <Activity className="h-6 w-6 animate-pulse" />
           </div>
           <div>
-            <h1 className="text-xl font-bold tracking-tight text-white flex items-center space-x-2">
-              <span>SentinelOps AI</span>
-              <span className="text-xs px-2 py-0.5 rounded bg-indigo-500/20 text-indigo-400 border border-indigo-500/30 uppercase tracking-widest font-mono">Autonomous SRE</span>
+            <h1 className="text-lg font-heading font-black tracking-tight text-[#0f172a] flex items-center space-x-2">
+              <span>SentinelOps</span>
+              <span className="text-[10px] px-2 py-0.5 rounded bg-blue-600/10 text-blue-600 border border-blue-600/20 uppercase tracking-widest font-mono">Autonomous SRE</span>
             </h1>
-            <p className="text-xs text-slate-400">Monitoring & Remediation Control Center (Local LLM Development)</p>
           </div>
         </div>
 
-        <div className="flex items-center space-x-4">
-          {/* Global Status Banner */}
-          <div className={`flex items-center space-x-2 px-3 py-1.5 rounded-full border text-xs font-medium transition-all ${
-            clusterIsHealthy 
-              ? "bg-emerald-950/20 border-emerald-500/30 text-emerald-400" 
-              : "bg-red-950/20 border-red-500/30 text-red-400 animate-pulse"
-          }`}>
-            <span className={`h-2 w-2 rounded-full ${clusterIsHealthy ? "bg-emerald-500" : "bg-red-500"} shadow`}></span>
-            <span>CLUSTER STATE: {clusterIsHealthy ? "HEALTHY" : "ANOMALY DETECTED"}</span>
-          </div>
+        {/* Center menu navigation links from the template */}
+        <nav className="hidden md:flex space-x-8 text-xs font-bold tracking-wider text-slate-500 font-sans">
+          <a href="#" className="hover:text-blue-600 transition-colors uppercase">Dashboard</a>
+          <a href="#ops-center" className="hover:text-blue-600 transition-colors uppercase">Operations Center</a>
+          <a href="#capabilities" className="hover:text-blue-600 transition-colors uppercase">Capabilities</a>
+          <a href="http://localhost:8000/docs" target="_blank" rel="noopener noreferrer" className="hover:text-blue-600 transition-colors uppercase flex items-center gap-1">
+            <span>API Docs</span>
+            <ExternalLink className="h-3 w-3" />
+          </a>
+        </nav>
 
-          {/* Reset button */}
+        <div className="flex items-center space-x-4">
+          {/* Reset button styled as the outline nav button in the template */}
           <button
             onClick={clearAllFaults}
             disabled={clearingFaults}
-            className="flex items-center space-x-2 px-4 py-2 text-xs font-semibold rounded-lg bg-slate-800 border border-slate-700 hover:bg-slate-700 active:bg-slate-800 text-white disabled:opacity-50 transition-colors"
+            className="flex items-center space-x-1.5 px-5 py-2 text-xs font-bold tracking-wider border-2 border-blue-600 text-blue-600 hover:bg-blue-600 hover:text-white rounded-full transition-all duration-200 disabled:opacity-50"
           >
-            <RefreshCw className={`h-3.5 w-3.5 ${clearingFaults ? "animate-spin" : ""}`} />
-            <span>{clearingFaults ? "Clearing Faults..." : "Reset Cluster Faults"}</span>
+            <RefreshCw className={`h-3 w-3 ${clearingFaults ? "animate-spin" : ""}`} />
+            <span>{clearingFaults ? "Clearing..." : "Reset Cluster"}</span>
           </button>
+          
+          <div className="p-2 rounded-full hover:bg-slate-50 text-slate-700 transition-colors cursor-pointer">
+            <User className="h-4.5 w-4.5" />
+          </div>
         </div>
       </header>
 
-      {/* Main Grid View */}
-      <main className="flex-1 p-6 grid grid-cols-1 xl:grid-cols-12 gap-6 overflow-hidden max-w-[1800px] mx-auto w-full">
+      {/* Hero Section & Generated Vector SRE Graphic */}
+      <section className="px-8 py-12 md:py-16 grid grid-cols-1 lg:grid-cols-12 gap-12 items-center max-w-[1400px] mx-auto w-full">
         
-        {/* Column 1: Services Status & Fault Injectors (4 Columns) */}
-        <section className="xl:col-span-4 flex flex-col space-y-6">
-          <div className="bg-[#0c1220]/75 border border-slate-800 rounded-xl p-5 shadow-xl backdrop-blur">
-            <h2 className="text-sm font-semibold uppercase tracking-wider text-slate-400 mb-4 flex items-center space-x-2">
-              <Server className="h-4 w-4 text-indigo-400" />
-              <span>Simulated Microservices</span>
-            </h2>
+        {/* Left Side: Copywriter Hero */}
+        <div className="lg:col-span-5 flex flex-col items-start text-left">
+          <h2 className="text-slate-900 font-heading font-extrabold text-3xl sm:text-4xl lg:text-[44px] leading-[1.15] tracking-tight uppercase mb-6">
+            You can access all your <span className="gradient-text">service telemetry</span> in one place
+          </h2>
+          <p className="text-slate-500 text-sm sm:text-base mb-8 leading-relaxed max-w-lg font-sans font-medium">
+            A fully autonomous, self-healing Site Reliability Engineering agent. It monitors logs and metrics, runs cognitive root cause analysis, executes Docker runbooks, and verifies restoration.
+          </p>
+          <button
+            onClick={startDemo}
+            className="gradient-btn text-white px-8 py-3.5 rounded-full text-xs font-bold tracking-wider hover:opacity-90 active:scale-95 transition-all cursor-pointer"
+          >
+            Get Started
+          </button>
+        </div>
 
-            {loadingServices ? (
-              <div className="py-10 text-center text-slate-500 flex flex-col items-center justify-center space-y-2">
-                <RefreshCw className="h-6 w-6 animate-spin text-indigo-500" />
-                <span className="text-xs">Loading service topologies...</span>
+        {/* Right Side: Generated Vector Illustration with floating tech elements */}
+        <div className="lg:col-span-7 w-full flex justify-center lg:justify-end relative">
+          <div className="relative rounded-2xl border border-slate-100 shadow-[0_20px_50px_rgba(0,0,0,0.06)] bg-white overflow-hidden p-2 transition-all hover:scale-[1.01] duration-300 w-full max-w-[580px]">
+            <img 
+              src="/sre_hero.png" 
+              alt="SentinelOps Autonomous SRE Illustration" 
+              className="w-full h-auto object-cover rounded-xl"
+            />
+            
+            {/* Floating Organic Badges overlapping the image */}
+            <div className="absolute top-6 left-6 px-4 py-2.5 rounded-xl bg-white/95 border border-slate-100/80 shadow-md flex items-center space-x-2.5 backdrop-blur-md">
+              <Activity className="h-5 w-5 text-blue-600 animate-pulse" />
+              <div className="text-left">
+                <div className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">Self-Healing</div>
+                <div className="text-xs font-heading font-black text-slate-800">Agent Active</div>
               </div>
-            ) : (
-              <div className="space-y-4">
-                {Object.values(services).map((service) => (
+            </div>
+            
+            <div className="absolute bottom-6 right-6 px-4 py-2.5 rounded-xl bg-white/95 border border-slate-100/80 shadow-md flex items-center space-x-2.5 backdrop-blur-md">
+              <Cpu className="h-5 w-5 text-purple-600 animate-pulse" />
+              <div className="text-left">
+                <div className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">Cognitive Engine</div>
+                <div className="text-xs font-heading font-black text-slate-800">Qwen2.5 (3B)</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+      </section>
+
+      {/* SRE Operations Center (Unified Dashboard Panels Together) */}
+      <section id="ops-center" className="px-8 py-12 max-w-[1400px] mx-auto w-full">
+        
+        <div className="mb-8 text-center md:text-left">
+          <h2 className="text-xs uppercase tracking-widest font-black text-blue-600 mb-2">Operations Center</h2>
+          <h3 className="font-heading font-black text-slate-800 text-3xl">Autonomous SRE Command Console</h3>
+          <p className="text-slate-500 text-sm mt-2 max-w-xl">
+            A unified cockpit integrating telemetry meters, active incident feeds, and the live agent reasoning loop. Trigger faults on the left to activate self-healing.
+          </p>
+        </div>
+
+        {/* Unified 3-panel Dashboard Layout */}
+        <div className="bg-white border border-slate-100 shadow-[0_15px_50px_rgba(0,0,0,0.03)] rounded-2xl overflow-hidden flex flex-col lg:flex-row lg:h-[650px] w-full divide-y lg:divide-y-0 lg:divide-x divide-slate-100">
+          
+          {/* Panel 1: Simulated Microservices (w-full lg:w-[35%]) */}
+          <div className="w-full lg:w-[35%] flex flex-col h-[500px] lg:h-full overflow-hidden bg-slate-50/10">
+            <div className="p-4 bg-slate-50 border-b border-slate-100 flex items-center justify-between">
+              <h4 className="text-xs font-bold uppercase tracking-wider text-slate-500 flex items-center space-x-1.5">
+                <Server className="h-4 w-4 text-blue-600" />
+                <span>Telemetry & Fault Injector</span>
+              </h4>
+              <div className={`flex items-center space-x-1.5 px-2.5 py-1 rounded-full border text-[9px] font-bold tracking-wide ${
+                clusterIsHealthy 
+                  ? "bg-emerald-50 border-emerald-100 text-emerald-600" 
+                  : "bg-red-50 border-red-100 text-red-600 animate-pulse"
+              }`}>
+                <span className={`h-1.5 w-1.5 rounded-full ${clusterIsHealthy ? "bg-emerald-500" : "bg-red-500"}`}></span>
+                <span>{clusterIsHealthy ? "HEALTHY" : "ANOMALY"}</span>
+              </div>
+            </div>
+
+            <div className="flex-1 overflow-y-auto p-4 space-y-3.5">
+              {loadingServices ? (
+                <div className="h-full flex flex-col items-center justify-center space-y-2">
+                  <RefreshCw className="h-5 w-5 animate-spin text-blue-600" />
+                  <span className="text-[11px] text-slate-400">Querying cluster...</span>
+                </div>
+              ) : (
+                Object.values(services).map((service) => (
                   <div 
                     key={service.name}
-                    className="p-4 rounded-lg bg-[#0e172a] border border-slate-800 hover:border-slate-700 transition-all flex flex-col space-y-3"
+                    className="p-3.5 bg-white border border-slate-100 rounded-xl shadow-[0_3px_8px_rgba(0,0,0,0.01)] hover:shadow-md transition-all flex flex-col space-y-2.5"
                   >
-                    {/* Header line */}
                     <div className="flex items-center justify-between">
-                      <div className="flex items-center space-x-2">
-                        <Layers className="h-4 w-4 text-indigo-400" />
-                        <span className="font-semibold text-sm text-white">{service.name}</span>
-                      </div>
-                      <span className={`px-2 py-0.5 text-xs font-semibold rounded border ${getStatusColor(service.status)}`}>
+                      <span className="font-bold text-xs text-slate-800">{service.name}</span>
+                      <span className={`px-1.5 py-0.5 text-[9px] font-bold tracking-wider rounded border ${getStatusColor(service.status)}`}>
                         {service.status.toUpperCase()}
                       </span>
                     </div>
 
-                    {/* Meters */}
-                    <div className="grid grid-cols-2 gap-3 text-xs">
-                      {/* CPU */}
-                      <div className="flex flex-col space-y-1">
-                        <span className="text-slate-400 flex items-center space-x-1">
-                          <Cpu className="h-3 w-3 text-slate-500" />
+                    <div className="space-y-1.5 text-[10px]">
+                      <div className="flex flex-col space-y-0.5">
+                        <div className="flex justify-between text-slate-400 text-[9px]">
                           <span>CPU</span>
-                        </span>
-                        <div className="flex items-center space-x-2">
-                          <div className="flex-1 bg-slate-800 h-1.5 rounded-full overflow-hidden">
-                            <div 
-                              className={`h-full rounded-full transition-all ${service.cpu > 0.8 ? "bg-red-500" : service.cpu > 0.4 ? "bg-amber-500" : "bg-emerald-500"}`}
-                              style={{ width: `${Math.min(service.cpu * 100, 100)}%` }}
-                            ></div>
-                          </div>
-                          <span className="font-mono font-semibold">{(service.cpu * 100).toFixed(0)}%</span>
+                          <span className="font-mono font-bold text-slate-600">{(service.cpu * 100).toFixed(0)}%</span>
+                        </div>
+                        <div className="w-full bg-slate-100 h-1.5 rounded-full overflow-hidden">
+                          <div 
+                            className={`h-full rounded-full transition-all duration-300 ${service.cpu > 0.8 ? "bg-red-500" : service.cpu > 0.4 ? "bg-amber-500" : "bg-blue-600"}`}
+                            style={{ width: `${Math.min(service.cpu * 100, 100)}%` }}
+                          ></div>
                         </div>
                       </div>
 
-                      {/* Memory */}
-                      <div className="flex flex-col space-y-1">
-                        <span className="text-slate-400 flex items-center space-x-1">
-                          <HardDrive className="h-3 w-3 text-slate-500" />
-                          <span>Memory</span>
-                        </span>
-                        <div className="flex items-center space-x-2">
-                          <div className="flex-1 bg-slate-800 h-1.5 rounded-full overflow-hidden">
-                            <div 
-                              className={`h-full rounded-full transition-all ${service.memory > 80 ? "bg-red-500 animate-pulse" : service.memory > 45 ? "bg-amber-500" : "bg-emerald-500"}`}
-                              style={{ width: `${Math.min((service.memory / 120) * 100, 100)}%` }}
-                            ></div>
-                          </div>
-                          <span className="font-mono font-semibold">{service.memory.toFixed(1)} MB</span>
+                      <div className="flex flex-col space-y-0.5">
+                        <div className="flex justify-between text-slate-400 text-[9px]">
+                          <span>MEMORY</span>
+                          <span className="font-mono font-bold text-slate-600">{service.memory.toFixed(0)} MB</span>
+                        </div>
+                        <div className="w-full bg-slate-100 h-1.5 rounded-full overflow-hidden">
+                          <div 
+                            className={`h-full rounded-full transition-all duration-300 ${service.memory > 80 ? "bg-red-500 animate-pulse" : service.memory > 45 ? "bg-amber-500" : "bg-blue-600"}`}
+                            style={{ width: `${Math.min((service.memory / 120) * 100, 100)}%` }}
+                          ></div>
                         </div>
                       </div>
                     </div>
 
-                    {/* Injectors (Only show for services that support fault scenarios) */}
                     {["payment-service", "order-service", "api-gateway"].includes(service.name) && (
-                      <div className="pt-2 border-t border-slate-800 flex flex-wrap gap-2">
+                      <div className="pt-2 border-t border-slate-100 flex items-center justify-between gap-1 flex-wrap">
                         {service.name === "payment-service" && (
                           <button
                             onClick={() => injectFault(service.name, "memory-leak")}
                             disabled={injectingFault !== null || service.status === "offline"}
-                            className="flex items-center space-x-1 px-2.5 py-1 text-[11px] font-semibold text-red-400 hover:text-white border border-red-500/30 hover:bg-red-600/20 active:bg-red-600/30 rounded transition-colors disabled:opacity-50"
+                            className="px-2.5 py-0.5 text-[9px] font-bold text-red-500 hover:text-white border border-red-500/25 hover:bg-red-500 active:bg-red-600 rounded-full transition-all duration-150 disabled:opacity-40"
                           >
-                            <HardDrive className="h-3 w-3" />
-                            <span>{injectingFault === `${service.name}-memory-leak` ? "Injecting..." : "Leak Memory"}</span>
+                            {injectingFault === `${service.name}-memory-leak` ? "Leaking..." : "Leak Mem"}
                           </button>
                         )}
                         {service.name === "order-service" && (
                           <button
                             onClick={() => injectFault(service.name, "cpu-spike")}
                             disabled={injectingFault !== null || service.status === "offline"}
-                            className="flex items-center space-x-1 px-2.5 py-1 text-[11px] font-semibold text-amber-400 hover:text-white border border-amber-500/30 hover:bg-amber-600/20 active:bg-amber-600/30 rounded transition-colors disabled:opacity-50"
+                            className="px-2.5 py-0.5 text-[9px] font-bold text-amber-600 hover:text-white border border-amber-500/25 hover:bg-amber-500 active:bg-amber-600 rounded-full transition-all duration-150 disabled:opacity-40"
                           >
-                            <Cpu className="h-3 w-3" />
-                            <span>{injectingFault === `${service.name}-cpu-spike` ? "Injecting..." : "Spike CPU"}</span>
+                            {injectingFault === `${service.name}-cpu-spike` ? "Spiking..." : "Spike CPU"}
                           </button>
                         )}
                         <button
                           onClick={() => injectFault(service.name, "error-spike")}
                           disabled={injectingFault !== null || service.status === "offline"}
-                          className="flex items-center space-x-1 px-2.5 py-1 text-[11px] font-semibold text-rose-400 hover:text-white border border-rose-500/30 hover:bg-rose-600/20 active:bg-rose-600/30 rounded transition-colors disabled:opacity-50"
+                          className="px-2.5 py-0.5 text-[9px] font-bold text-rose-500 hover:text-white border border-rose-500/25 hover:bg-rose-500 active:bg-[#f43f5e] rounded-full transition-all duration-150 disabled:opacity-40"
                         >
-                          <Flame className="h-3 w-3" />
-                          <span>{injectingFault === `${service.name}-error-spike` ? "Injecting..." : "Inject 500s"}</span>
+                          {injectingFault === `${service.name}-error-spike` ? "Injecting..." : "Fail HTTP"}
                         </button>
                       </div>
                     )}
                   </div>
-                ))}
-              </div>
-            )}
+                ))
+              )}
+            </div>
           </div>
-        </section>
 
-        {/* Column 2: Incidents List (4 Columns) */}
-        <section className="xl:col-span-4 flex flex-col space-y-6">
-          <div className="bg-[#0c1220]/75 border border-slate-800 rounded-xl p-5 shadow-xl backdrop-blur flex flex-col h-full max-h-[85vh]">
-            <div className="flex items-center justify-between mb-4">
-              <h2 className="text-sm font-semibold uppercase tracking-wider text-slate-400 flex items-center space-x-2">
+          {/* Panel 2: Incident Feed (w-full lg:w-[25%]) */}
+          <div className="w-full lg:w-[25%] flex flex-col h-[400px] lg:h-full overflow-hidden bg-white">
+            <div className="p-4 border-b border-slate-100 flex items-center justify-between">
+              <h4 className="text-xs font-bold uppercase tracking-wider text-slate-500 flex items-center space-x-1.5">
                 <AlertTriangle className="h-4 w-4 text-amber-500" />
-                <span>Incident Feed ({incidents.length})</span>
-              </h2>
+                <span>Incident Feed</span>
+              </h4>
               <button 
                 onClick={() => setFilterActive(!filterActive)}
-                className={`text-xs px-2 py-1 rounded border transition-colors ${
+                className={`text-[9px] px-2.5 py-1 rounded-full border-2 font-bold tracking-wider uppercase transition-colors cursor-pointer ${
                   filterActive 
-                    ? "bg-indigo-600 border-indigo-500 text-white" 
-                    : "bg-slate-800 border-slate-700 text-slate-400 hover:text-white"
+                    ? "bg-blue-600 border-blue-600 text-white" 
+                    : "bg-transparent border-slate-200 text-slate-500 hover:text-slate-700"
                 }`}
               >
-                {filterActive ? "Show Resolved" : "Filter Active"}
+                {filterActive ? "Resolved" : "Active Only"}
               </button>
             </div>
 
-            <div className="flex-1 overflow-y-auto space-y-3 pr-1">
+            <div className="flex-1 overflow-y-auto p-4 space-y-3.5">
               {filteredIncidents.length === 0 ? (
-                <div className="h-40 flex flex-col items-center justify-center text-slate-500 text-center space-y-2 border border-dashed border-slate-800 rounded-lg">
-                  <CheckCircle className="h-8 w-8 text-emerald-500/70" />
-                  <span className="text-xs">No incidents logged. Everything is stable.</span>
+                <div className="h-40 flex flex-col items-center justify-center text-slate-400 text-center space-y-2 border border-dashed border-slate-200 rounded-xl">
+                  <CheckCircle className="h-7 w-7 text-emerald-500 animate-pulse" />
+                  <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">System Stable</span>
                 </div>
               ) : (
                 filteredIncidents.map((incident) => {
                   const isSelected = incident.id === selectedIncidentId;
-                  const isActive = ["INVESTIGATING", "ROOT_CAUSE_FOUND", "EXECUTING_FIX", "VERIFYING"].includes(incident.status);
                   return (
                     <div
                       key={incident.id}
                       onClick={() => setSelectedIncidentId(incident.id)}
-                      className={`p-3.5 rounded-lg border text-left cursor-pointer transition-all flex flex-col space-y-2.5 ${
+                      className={`p-4 rounded-xl border text-left cursor-pointer transition-all flex flex-col space-y-2.5 relative overflow-hidden ${
                         isSelected 
-                          ? "bg-slate-900 border-indigo-500/80 shadow-md shadow-indigo-500/5" 
-                          : "bg-[#0e172a] border-slate-800 hover:border-slate-700"
+                          ? "bg-blue-50/20 border-blue-600/30 shadow-[0_4px_12px_rgba(9,66,230,0.03)]" 
+                          : "bg-slate-50/30 border-slate-100 hover:border-slate-200"
                       }`}
                     >
                       <div className="flex items-center justify-between">
-                        <span className="font-mono text-xs font-bold text-slate-300">{incident.id}</span>
+                        <span className="font-mono text-[10px] font-bold text-slate-500">{incident.id}</span>
                         {getIncidentStatusBadge(incident.status)}
                       </div>
 
                       <div>
-                        <h4 className="font-semibold text-xs text-white">
-                          Alert: {incident.alert_name}
+                        <h4 className="font-bold text-xs text-slate-800">
+                          {incident.alert_name}
                         </h4>
-                        <div className="text-slate-400 text-[11px] mt-0.5 flex items-center space-x-1">
-                          <span>Service:</span>
-                          <span className="font-mono text-slate-300 font-semibold">{incident.service}</span>
+                        <div className="text-slate-400 text-[9px] mt-0.5 flex items-center space-x-1">
+                          <span>Target:</span>
+                          <span className="font-mono text-slate-700 font-semibold">{incident.service}</span>
                         </div>
                       </div>
 
-                      <div className="flex items-center justify-between pt-2 border-t border-slate-800/60 text-[10px] text-slate-500">
+                      <div className="flex items-center justify-between pt-2 border-t border-slate-100 text-[9px] text-slate-400">
                         <span className="flex items-center space-x-1">
-                          <Clock className="h-3 w-3" />
+                          <Clock className="h-3.5 w-3.5" />
                           <span>{formatTime(incident.created_at)}</span>
                         </span>
                         {incident.resolution_time_seconds && (
-                          <span>MTTR: {incident.resolution_time_seconds.toFixed(0)}s</span>
+                          <span className="font-mono font-bold text-slate-600">MTTR: {incident.resolution_time_seconds.toFixed(0)}s</span>
                         )}
                       </div>
                     </div>
@@ -483,37 +564,36 @@ export default function Home() {
               )}
             </div>
           </div>
-        </section>
 
-        {/* Column 3: Live Agent Operations Terminal (4 Columns) */}
-        <section className="xl:col-span-4 flex flex-col space-y-6">
-          <div className="bg-[#0c1220]/75 border border-slate-800 rounded-xl p-5 shadow-xl backdrop-blur flex flex-col h-full max-h-[85vh]">
-            <h2 className="text-sm font-semibold uppercase tracking-wider text-slate-400 mb-3 flex items-center space-x-2 border-b border-slate-800 pb-3">
-              <Terminal className="h-4 w-4 text-emerald-400" />
-              <span>SRE Agent Console</span>
-            </h2>
+          {/* Panel 3: SRE Agent Console Terminal (w-full lg:w-[40%]) */}
+          <div className="w-full lg:w-[40%] flex flex-col h-[500px] lg:h-full overflow-hidden bg-slate-50/10">
+            <div className="p-4 bg-slate-50 border-b border-slate-100 flex items-center justify-between">
+              <h4 className="text-xs font-bold uppercase tracking-wider text-slate-500 flex items-center space-x-1.5">
+                <Terminal className="h-4 w-4 text-slate-600" />
+                <span>SRE Agent Log & Reports</span>
+              </h4>
+            </div>
 
             {selectedIncident ? (
-              <div className="flex-1 flex flex-col overflow-hidden">
-                {/* Selected incident info header */}
-                <div className="p-3 bg-slate-900/60 border border-slate-800 rounded-lg text-xs space-y-2 mb-4">
-                  <div className="grid grid-cols-2 gap-2 text-slate-400">
-                    <div>Incident: <span className="font-mono text-white">{selectedIncident.id}</span></div>
-                    <div>Status: <span className="text-white font-semibold">{selectedIncident.status}</span></div>
-                    <div>Service: <span className="font-mono text-white">{selectedIncident.service}</span></div>
+              <div className="flex-1 flex flex-col p-4 overflow-hidden space-y-3">
+                {/* Meta details dashboard inside Panel 3 */}
+                <div className="p-3 bg-white border border-slate-100 rounded-xl text-[10px] space-y-2.5 flex flex-col shadow-[0_4px_12px_rgba(0,0,0,0.01)] shrink-0">
+                  <div className="grid grid-cols-2 gap-1.5 text-slate-500 font-medium">
+                    <div>ID: <span className="font-mono font-bold text-slate-800">{selectedIncident.id}</span></div>
+                    <div>Status: <span className="font-bold text-slate-800">{selectedIncident.status}</span></div>
+                    <div>Target: <span className="font-mono font-bold text-slate-800">{selectedIncident.service}</span></div>
                     {selectedIncident.resolution_time_seconds && (
-                      <div>Time to Resolve: <span className="text-white font-semibold">{selectedIncident.resolution_time_seconds}s</span></div>
+                      <div>MTTR: <span className="font-bold text-slate-800">{selectedIncident.resolution_time_seconds}s</span></div>
                     )}
                   </div>
 
-                  {/* Confidence & Risk Row */}
+                  {/* Confidence & Risk */}
                   {(selectedIncident.confidence !== undefined && selectedIncident.confidence !== null) && (
-                    <div className="pt-2 border-t border-slate-800 flex items-center gap-4">
-                      {/* Confidence Gauge */}
-                      <div className="flex items-center gap-2 flex-1">
-                        <Target className="h-3.5 w-3.5 text-cyan-400 shrink-0" />
-                        <span className="text-slate-400 text-[11px] shrink-0">Confidence</span>
-                        <div className="flex-1 bg-slate-800 h-2 rounded-full overflow-hidden">
+                    <div className="pt-2 border-t border-slate-100 flex items-center gap-3 justify-between">
+                      <div className="flex items-center gap-1.5 flex-grow max-w-[70%]">
+                        <Target className="h-3.5 w-3.5 text-blue-600 shrink-0" />
+                        <span className="text-slate-400 text-[9px] uppercase tracking-wider font-semibold shrink-0">Confidence</span>
+                        <div className="flex-grow bg-slate-100 h-1.5 rounded-full overflow-hidden">
                           <div
                             className={`h-full rounded-full transition-all duration-500 ${
                               selectedIncident.confidence >= 80 ? "bg-emerald-500" :
@@ -522,86 +602,86 @@ export default function Home() {
                             style={{ width: `${Math.min(selectedIncident.confidence, 100)}%` }}
                           ></div>
                         </div>
-                        <span className="font-mono text-white font-semibold text-[11px] shrink-0">{selectedIncident.confidence}%</span>
+                        <span className="font-mono text-slate-800 font-bold text-[9px] shrink-0">{selectedIncident.confidence}%</span>
                       </div>
 
-                      {/* Risk Level Badge */}
                       {selectedIncident.risk_level && (() => {
                         const rc = getRiskColor(selectedIncident.risk_level);
                         return (
-                          <div className={`flex items-center gap-1 px-2 py-0.5 rounded border ${rc.border} ${rc.bg}`}>
+                          <div className={`flex items-center gap-0.5 px-2 py-0.5 rounded border ${rc.border} ${rc.bg} shrink-0`}>
                             <Shield className={`h-3 w-3 ${rc.text}`} />
-                            <span className={`font-semibold text-[10px] uppercase tracking-wider ${rc.text}`}>{selectedIncident.risk_level}</span>
+                            <span className={`font-bold text-[8px] uppercase tracking-wider ${rc.text}`}>{selectedIncident.risk_level}</span>
                           </div>
                         );
                       })()}
                     </div>
                   )}
 
-                  {/* Evidence List */}
+                  {/* Evidence & Blast Radius */}
                   {(() => {
                     const evidenceItems = parseJsonField(selectedIncident.evidence);
-                    return evidenceItems.length > 0 ? (
-                      <div className="pt-2 border-t border-slate-800">
-                        <div className="text-[10px] uppercase tracking-wider text-slate-500 mb-1 flex items-center gap-1">
-                          <Zap className="h-3 w-3 text-amber-400" />
-                          Evidence
-                        </div>
-                        <ul className="space-y-0.5">
-                          {evidenceItems.map((e, i) => (
-                            <li key={i} className="text-[11px] text-slate-300 pl-3 relative before:content-['▸'] before:absolute before:left-0 before:text-amber-500 before:text-[10px]">{e}</li>
-                          ))}
-                        </ul>
-                      </div>
-                    ) : null;
-                  })()}
-
-                  {/* Blast Radius */}
-                  {(() => {
                     const affectedItems = parseJsonField(selectedIncident.affected_services);
-                    return affectedItems.length > 0 ? (
-                      <div className="pt-2 border-t border-slate-800">
-                        <div className="text-[10px] uppercase tracking-wider text-slate-500 mb-1">Blast Radius</div>
-                        <div className="flex flex-wrap gap-1.5">
-                          {affectedItems.map((svc, i) => (
-                            <span key={i} className="px-1.5 py-0.5 text-[10px] font-mono rounded border border-slate-700 bg-slate-800/50 text-slate-300">{svc}</span>
-                          ))}
-                        </div>
+                    return (evidenceItems.length > 0 || affectedItems.length > 0) ? (
+                      <div className="pt-2 border-t border-slate-100 flex flex-col space-y-1.5">
+                        {evidenceItems.length > 0 && (
+                          <div>
+                            <div className="text-[8px] font-bold uppercase tracking-wider text-slate-400 mb-0.5 flex items-center gap-1">
+                              <Zap className="h-3 w-3 text-amber-500" />
+                              Evidence
+                            </div>
+                            <ul className="space-y-0.5 pl-0.5">
+                              {evidenceItems.map((e, i) => (
+                                <li key={i} className="text-[9px] text-slate-600 pl-3 relative before:content-['▸'] before:absolute before:left-0 before:text-blue-500">{e}</li>
+                              ))}
+                            </ul>
+                          </div>
+                        )}
+                        {affectedItems.length > 0 && (
+                          <div>
+                            <div className="text-[8px] font-bold uppercase tracking-wider text-slate-400 mb-0.5">
+                              Blast Radius
+                            </div>
+                            <div className="flex flex-wrap gap-1">
+                              {affectedItems.map((svc, i) => (
+                                <span key={i} className="px-1.5 py-0.5 text-[8px] font-mono rounded border border-slate-100 bg-slate-50 text-slate-600 shadow-sm">{svc}</span>
+                              ))}
+                            </div>
+                          </div>
+                        )}
                       </div>
                     ) : null;
                   })()}
 
                   {selectedIncident.root_cause && (
-                    <div className="pt-2 border-t border-slate-800 text-[11px] text-slate-300">
-                      <strong className="text-slate-400">Diagnosed Root Cause:</strong><br />
+                    <div className="pt-2 border-t border-slate-100 text-[10px] text-slate-600">
+                      <strong className="text-slate-400 uppercase tracking-wider text-[8px] block mb-0.5">Root Cause</strong>
                       {selectedIncident.root_cause}
                     </div>
                   )}
                 </div>
 
-                {/* Console Terminal Log */}
-                <div className="flex-1 bg-black/90 rounded-lg border border-slate-900 p-4 font-mono text-xs overflow-y-auto flex flex-col space-y-2.5 relative shadow-inner">
+                {/* Console Output */}
+                <div ref={consoleRef} className="flex-grow bg-[#0c1020] rounded-xl p-4 font-mono text-[11px] overflow-y-auto flex flex-col space-y-2 relative shadow-inner">
                   {logs.length === 0 ? (
-                    <div className="h-full flex items-center justify-center text-slate-600 text-center italic">
-                      Initializing SRE reasoning loop connection...
+                    <div className="h-full flex items-center justify-center text-slate-500 text-center italic">
+                      Idle... select an incident to stream agent timeline.
                     </div>
                   ) : (
                     logs.map((log) => (
                       <div key={log.id} className="leading-relaxed whitespace-pre-wrap">
-                        <span className="text-slate-500 mr-2 text-[10px]">{formatTime(log.timestamp)}</span>
+                        <span className="text-slate-500 mr-2 text-[9px]">{formatTime(log.timestamp)}</span>
                         <span className={getLogStyle(log.level)}>{log.message}</span>
                       </div>
                     ))
                   )}
-                  <div ref={logsEndRef} />
                 </div>
 
-                {/* Post Mortem Document Download section */}
+                {/* Markdown post-mortem downloader */}
                 {selectedIncident.resolution_action && (
-                  <div className="mt-4 pt-3 border-t border-slate-800 flex justify-between items-center">
-                    <span className="text-xs text-emerald-400 flex items-center space-x-1">
+                  <div className="pt-2 border-t border-slate-200/60 flex justify-between items-center shrink-0">
+                    <span className="text-[10px] text-emerald-600 font-bold flex items-center space-x-1">
                       <CheckCircle className="h-3.5 w-3.5" />
-                      <span>Post-Mortem Compiled</span>
+                      <span>Report Compiled</span>
                     </span>
                     <button
                       onClick={() => {
@@ -613,7 +693,7 @@ export default function Home() {
                         element.click();
                         document.body.removeChild(element);
                       }}
-                      className="flex items-center space-x-1.5 px-3 py-1.5 text-xs font-semibold rounded bg-indigo-600 hover:bg-indigo-500 active:bg-indigo-600 text-white transition-colors"
+                      className="flex items-center space-x-1 px-3 py-1.5 text-[10px] font-bold rounded-full bg-blue-600 hover:bg-blue-700 text-white shadow-md shadow-blue-500/10 active:scale-95 transition-all cursor-pointer"
                     >
                       <Download className="h-3 w-3" />
                       <span>Download Report</span>
@@ -622,26 +702,94 @@ export default function Home() {
                 )}
               </div>
             ) : (
-              <div className="flex-1 flex flex-col items-center justify-center text-center text-slate-500 space-y-3 border border-dashed border-slate-800 rounded-lg">
-                <Terminal className="h-10 w-10 text-slate-700 animate-pulse" />
+              <div className="flex-grow flex flex-col items-center justify-center text-center text-slate-400 space-y-3 p-10">
+                <Terminal className="h-9 w-9 text-slate-300 animate-pulse" />
                 <div>
-                  <h3 className="font-semibold text-sm text-slate-400">Terminal Deconnected</h3>
-                  <p className="text-xs max-w-[200px] mt-1">Select an incident from the feed to hook into the live agent operations log.</p>
+                  <h3 className="font-bold text-xs text-slate-500">Terminal Offline</h3>
+                  <p className="text-[10px] max-w-[200px] mt-1 text-slate-400">Select an incident from the feed to connect into SRE logs.</p>
                 </div>
               </div>
             )}
           </div>
-        </section>
 
-      </main>
+        </div>
+
+      </section>
+
+      {/* SRE Capabilities Section (Matching "Our Top Benefits") */}
+      <section id="capabilities" className="bg-white/50 border-y border-slate-100/80 px-8 py-16 w-full">
+        <div className="max-w-[1400px] mx-auto text-center mb-16">
+          <h2 className="text-xs uppercase tracking-widest font-black text-blue-600 mb-2">Our SRE Capabilities</h2>
+          <h3 className="font-heading font-black text-slate-800 text-3xl">Auto-Healing Operations Engine</h3>
+          <p className="text-slate-500 text-sm mt-3 max-w-lg mx-auto">SentinelOps monitors, resolves, and documents incidents dynamically without developer interventions.</p>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-12 max-w-[1400px] mx-auto w-full px-4">
+          
+          {/* Card 1: Automatic Remediation */}
+          <div className="relative bg-white border border-slate-100 shadow-[0_8px_30px_rgba(0,0,0,0.03)] rounded-2xl pl-10 pr-6 py-7 flex items-start text-left">
+            {/* Circular badge overlapping left edge */}
+            <div className="absolute -left-7 top-1/2 transform -translate-y-1/2 w-14 h-14 rounded-full flex items-center justify-center bg-[#00decb] text-white shadow-lg pulse-glow">
+              <Shield className="h-6 w-6" />
+            </div>
+            <div>
+              <h4 className="font-heading font-bold text-slate-800 text-lg mb-2">Automatic Remediation</h4>
+              <p className="text-slate-500 text-xs leading-relaxed font-sans font-medium">
+                SentinelOps evaluates firing alerts and automatically runs targeted SRE runbooks like service restarts, configuration rollbacks, and capacity scaling.
+              </p>
+            </div>
+          </div>
+
+          {/* Card 2: Cognitive RCA */}
+          <div className="relative bg-white border border-slate-100 shadow-[0_8px_30px_rgba(0,0,0,0.03)] rounded-2xl pl-10 pr-6 py-7 flex items-start text-left">
+            {/* Circular badge overlapping left edge */}
+            <div className="absolute -left-7 top-1/2 transform -translate-y-1/2 w-14 h-14 rounded-full flex items-center justify-center bg-[#8b5cf6] text-white shadow-lg pulse-glow">
+              <Cpu className="h-6 w-6" />
+            </div>
+            <div>
+              <h4 className="font-heading font-bold text-slate-800 text-lg mb-2">Make Better Decision</h4>
+              <p className="text-slate-500 text-xs leading-relaxed font-sans font-medium">
+                Uses local LLM reasoning loops to investigate container stdout logs, health checks, and Prometheus metrics to pinpoint root causes.
+              </p>
+            </div>
+          </div>
+
+          {/* Card 3: Spectacular Dashboard */}
+          <div className="relative bg-white border border-slate-100 shadow-[0_8px_30px_rgba(0,0,0,0.03)] rounded-2xl pl-10 pr-6 py-7 flex items-start text-left">
+            {/* Circular badge overlapping left edge */}
+            <div className="absolute -left-7 top-1/2 transform -translate-y-1/2 w-14 h-14 rounded-full flex items-center justify-center bg-[#0942e6] text-white shadow-lg pulse-glow">
+              <Activity className="h-6 w-6" />
+            </div>
+            <div>
+              <h4 className="font-heading font-bold text-slate-800 text-lg mb-2">Spectacular Dashboard</h4>
+              <p className="text-slate-500 text-xs leading-relaxed font-sans font-medium">
+                Renders microservice status widgets, streams live agent diagnostics logs, resolves metrics warnings, and auto-compiles detailed Markdown post-mortems.
+              </p>
+            </div>
+          </div>
+
+        </div>
+      </section>
 
       {/* Footer */}
-      <footer className="border-t border-slate-800/80 bg-[#070b13] px-6 py-4 text-center text-xs text-slate-500 mt-auto">
-        <div className="flex items-center justify-between max-w-[1800px] mx-auto w-full">
-          <div>SentinelOps Agent SRE Framework | Local LLM development</div>
-          <div>Version 1.0.0 (Ollama: qwen2.5:3b)</div>
+      <footer className="bg-white border-t border-slate-100 px-8 py-6 text-center text-xs text-slate-400 mt-auto font-sans">
+        <div className="flex flex-col sm:flex-row items-center justify-between max-w-[1400px] mx-auto w-full gap-4">
+          <div>SentinelOps Agent SRE Framework | Local LLM Development</div>
+          <div className="flex items-center gap-2">
+            <span>Version 1.0.0</span>
+            <span className="text-slate-300">|</span>
+            <span>Ollama: qwen2.5:3b</span>
+          </div>
         </div>
       </footer>
+
+      {/* Floating Rocket scroll-to-top button from template */}
+      <div 
+        onClick={scrollToTop}
+        className="fixed bottom-6 right-6 w-11 h-11 bg-blue-600 hover:bg-blue-700 text-white rounded-xl shadow-lg transition-all duration-300 flex items-center justify-center cursor-pointer hover:shadow-xl active:scale-90 z-50 group"
+      >
+        <Rocket className="h-5 w-5 transform -rotate-45 group-hover:-translate-y-0.5 transition-transform" />
+      </div>
 
     </div>
   );
