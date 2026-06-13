@@ -6,6 +6,15 @@ The project runs in two modes: a host-native local environment (using an SQLite 
 
 ---
 
+## Screenshots
+
+<img width="1600" height="739" alt="WhatsApp Image 2026-06-12 at 1 56 45 PM" src="https://github.com/user-attachments/assets/3b5e5b3a-7ccb-4fdf-bc64-2d01fdb1a51a" />
+
+<img width="1600" height="648" alt="WhatsApp Image 2026-06-12 at 1 56 58 PM" src="https://github.com/user-attachments/assets/82428377-00d7-432b-83eb-64d3b0bd9d20" />
+
+
+---
+
 ## System Architecture
 
 The project consists of five primary layers:
