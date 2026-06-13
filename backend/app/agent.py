@@ -24,7 +24,9 @@ from app.sre_system_prompt import (
     SRE_SYSTEM_PROMPT, 
     build_investigation_prompt,
     AUDITOR_SYSTEM_PROMPT,
-    build_audit_report_prompt
+    build_audit_report_prompt,
+    GOVERNANCE_SYSTEM_PROMPT,
+    build_governance_prompt
 )
 
 # Logger setup
@@ -81,6 +83,9 @@ class AgentState(TypedDict):
     analyzer_logs: Optional[str]
     analyzer_metrics: Optional[str]
     analyzer_health: Optional[str]
+    # Safety and Governance fields
+    governance_approved: Optional[bool]
+    governance_reason: Optional[str]
 
 # Database logging helpers
 def log_step(incident_id: str, message: str, level: str = "INFO"):
@@ -226,17 +231,32 @@ def incident_commander_node(state: AgentState) -> AgentState:
             "next_agent": "diagnostics_agent"
         }
         
-    # 3. Remediation check
+    # 3. Governance & Safety check
     remediation_choice = state.get("remediation_choice")
     needs_remediation = remediation_choice is not None and remediation_choice != "NO_ACTION"
+    governance_approved = state.get("governance_approved")
     has_remediation = state.get("remediation_result") is not None
     
-    if needs_remediation and not has_remediation:
-        log_step(incident_id, f"[Incident Commander] Diagnostics completed: root cause is '{state.get('root_cause')}' ({state.get('confidence', 0)}% confidence). Recommended runbook: {remediation_choice}.", "INFO")
-        log_step(incident_id, f"[Incident Commander] Action: Routing to Remediation Executor to deploy plan: {remediation_choice}.", "AGENT_THOUGHT")
+    if needs_remediation and governance_approved is None:
+        log_step(incident_id, f"[Incident Commander] Diagnostics completed. Routing to Governance & Safety Agent for risk evaluation.", "AGENT_THOUGHT")
+        return {
+            **state,
+            "next_agent": "governance_safety"
+        }
+        
+    if needs_remediation and governance_approved is True and not has_remediation:
+        log_step(incident_id, f"[Incident Commander] Governance approved. Routing to Remediation Executor to deploy plan: {remediation_choice}.", "AGENT_THOUGHT")
         return {
             **state,
             "next_agent": "remediation_executor"
+        }
+        
+    if needs_remediation and governance_approved is False and not has_remediation:
+        log_step(incident_id, f"[Incident Commander] Governance REJECTED / PENDING_APPROVAL. Halting automated execution workflow.", "INFO")
+        return {
+            **state,
+            "next_agent": "auditor",
+            "status": "PENDING_APPROVAL"
         }
         
     # 4. Verification/Audit check
@@ -245,6 +265,8 @@ def incident_commander_node(state: AgentState) -> AgentState:
         if not needs_remediation:
             log_step(incident_id, f"[Incident Commander] Diagnostics completed: root cause is '{state.get('root_cause')}' ({state.get('confidence', 0)}% confidence). Recommended runbook: NO_ACTION.", "INFO")
             log_step(incident_id, "[Incident Commander] Action: Bypassing remediation (NO_ACTION). Routing directly to Auditor.", "AGENT_THOUGHT")
+        elif governance_approved is False:
+            log_step(incident_id, "[Incident Commander] Action: Bypassing remediation due to PENDING_APPROVAL status. Routing directly to Auditor for final summary.", "AGENT_THOUGHT")
         else:
             log_step(incident_id, "[Incident Commander] Remediation successfully deployed. Routing control to Auditor for recovery verification.", "AGENT_THOUGHT")
             
@@ -426,6 +448,210 @@ def remediation_executor_node(state: AgentState) -> AgentState:
     }
 
 
+def governance_safety_agent_node(state: AgentState) -> AgentState:
+    """
+    Governance & Safety Agent Node:
+    - Evaluates proposed remediation action based on risk level, confidence, impacted services, and service type.
+    - Classifies the proposed action into LOW, MEDIUM, HIGH, or CRITICAL risk.
+    - Decides whether it can execute automatically or requires human approval.
+    """
+    incident_id = state["incident_id"]
+    service = state["service"]
+    root_cause = state.get("root_cause") or "Unknown"
+    confidence = state.get("confidence") or 100
+    remediation_choice = state.get("remediation_choice") or "RESTART"
+    affected_services = state.get("affected_services") or [service]
+
+    log_step(incident_id, f"[Governance & Safety Agent] Evaluating remediation action '{remediation_choice}' for service '{service}'.", "INFO")
+
+    # Heuristics baseline / fallback
+    # Risk Classification mapping: LOW (0), MEDIUM (1), HIGH (2), CRITICAL (3)
+    risk_map = {"LOW": 0, "MEDIUM": 1, "HIGH": 2, "CRITICAL": 3}
+    rev_risk_map = {0: "LOW", 1: "MEDIUM", 2: "HIGH", 3: "CRITICAL"}
+    
+    # Base risk determination
+    if remediation_choice in ["RESTART", "CLEAR_STUCK_JOBS", "RESTART_DEPENDENCY"]:
+        base_risk = "LOW"
+    elif remediation_choice in ["SCALE", "SCALE_SERVICE"]:
+        base_risk = "MEDIUM"
+    elif remediation_choice in ["ROLLBACK", "ROLLBACK_DEPLOYMENT"]:
+        base_risk = "HIGH"
+    else:
+        base_risk = "LOW" # default fallback
+        
+    risk_val = risk_map[base_risk]
+
+    # Additional Rules:
+    # Rule 1: If confidence < 80%, increase risk level by one category
+    if confidence < 80:
+        risk_val = min(3, risk_val + 1)
+        
+    # Rule 2: If more than one service is impacted, increase risk level by one category
+    if len(affected_services) > 1:
+        risk_val = min(3, risk_val + 1)
+        
+    # Rule 3: If database, networking, authentication, secrets, or storage systems are involved, minimum risk level is HIGH
+    db_keywords = ["db", "database", "postgres", "mysql", "sqlite", "sql", "network", "auth", "secret", "storage", "vault", "s3", "key", "password"]
+    is_subsystem_involved = any(
+        k in service.lower() or k in root_cause.lower() or k in remediation_choice.lower()
+        for k in db_keywords
+    )
+    if is_subsystem_involved:
+        risk_val = max(2, risk_val) # HIGH is 2
+        
+    # Rule 4: If rollback capability is unknown, minimum risk level is CRITICAL
+    # We assume for restart, rollback, scale rollback is known.
+    rollback_known = remediation_choice in ["RESTART", "ROLLBACK", "SCALE", "NO_ACTION"]
+    if not rollback_known:
+        risk_val = 3 # CRITICAL is 3
+
+    # Rule 5: Never approve destructive actions automatically (force CRITICAL risk)
+    destructive_keywords = ["delete", "destroy", "terminate", "drop", "wipe"]
+    is_destructive = any(
+        k in remediation_choice.lower() or k in root_cause.lower()
+        for k in destructive_keywords
+    )
+    if is_destructive:
+        risk_val = 3 # CRITICAL
+
+    final_risk_level = rev_risk_map[risk_val]
+    
+    # Decisions based on risk level
+    approved = True
+    requires_human_approval = False
+    email_notification_required = False
+    
+    if final_risk_level in ["HIGH", "CRITICAL"]:
+        approved = False
+        requires_human_approval = True
+        email_notification_required = True
+
+    reason = f"Remediation action '{remediation_choice}' risk assessment: {final_risk_level}. "
+    if not approved:
+        reason += f"Action requires human approval due to {final_risk_level} risk classification rules."
+    else:
+        reason += "Action approved for autonomous execution."
+
+    evaluation = {
+        "risk_level": final_risk_level,
+        "approved": approved,
+        "reason": reason,
+        "requires_human_approval": requires_human_approval,
+        "email_notification_required": email_notification_required,
+        "approval_request": {
+            "incident_id": incident_id,
+            "affected_services": affected_services,
+            "root_cause": root_cause,
+            "proposed_action": remediation_choice,
+            "risk_level": final_risk_level,
+            "estimated_blast_radius": f"Downstream impact on {', '.join(affected_services)}",
+            "rollback_plan": "Restore configuration or scale back to previous state" if remediation_choice in ["SCALE", "ROLLBACK"] else "No specific rollback needed (non-destructive restart)",
+            "expected_recovery_outcome": "Restored service responsiveness and normalized telemetry metrics",
+            "confidence_score": confidence
+        }
+    }
+
+    # Try calling LLM for Governance & Safety evaluation
+    try:
+        if llm:
+            user_prompt = build_governance_prompt(
+                incident_id=incident_id,
+                service=service,
+                root_cause=root_cause,
+                confidence=confidence,
+                remediation_choice=remediation_choice,
+                affected_services=affected_services
+            )
+            response = llm.invoke([
+                SystemMessage(content=GOVERNANCE_SYSTEM_PROMPT),
+                HumanMessage(content=user_prompt)
+            ])
+            content = response.content.strip()
+            parsed = _try_parse_json(content)
+            if parsed and "risk_level" in parsed:
+                evaluation = parsed
+                log_step(incident_id, "[Governance & Safety Agent] LLM risk evaluation completed.", "INFO")
+            else:
+                log_step(incident_id, "[Governance & Safety Agent] LLM output not in expected JSON format. Falling back to heuristic rules.", "WARNING")
+    except Exception as e:
+        log_step(incident_id, f"[Governance & Safety Agent] LLM reasoning failed: {str(e)}. Using heuristic fallback.", "WARNING")
+
+    # Re-extract values from evaluation dict
+    risk_level = str(evaluation.get("risk_level", final_risk_level)).upper()
+    approved = bool(evaluation.get("approved", approved))
+    reason = str(evaluation.get("reason", reason))
+    requires_human_approval = bool(evaluation.get("requires_human_approval", requires_human_approval))
+    email_notification_required = bool(evaluation.get("email_notification_required", email_notification_required))
+    approval_request = evaluation.get("approval_request") or {}
+
+    log_step(incident_id, f"[Governance & Safety Agent] Risk level evaluated as {risk_level}.", "INFO")
+    log_step(incident_id, f"[Governance & Safety Agent] Decision: {'APPROVED' if approved else 'REJECTED/PENDING_APPROVAL'}. Reason: {reason}", "INFO")
+
+    # Email simulation and Artifact writing if email notification or human approval is required
+    if email_notification_required or requires_human_approval:
+        email_content = (
+            f"Subject: [APPROVAL REQUIRED] SentinelOps AI Remediation Approval - {incident_id}\n\n"
+            f"An incident requiring human authorization has occurred.\n\n"
+            f"Incident details:\n"
+            f"- Incident ID: {approval_request.get('incident_id', incident_id)}\n"
+            f"- Affected Services: {', '.join(approval_request.get('affected_services', affected_services))}\n"
+            f"- Root Cause: {approval_request.get('root_cause', root_cause)}\n"
+            f"- Proposed Action: {approval_request.get('proposed_action', remediation_choice)}\n"
+            f"- Risk Level: {risk_level}\n"
+            f"- Estimated Blast Radius: {approval_request.get('estimated_blast_radius', 'Unknown')}\n"
+            f"- Rollback Plan: {approval_request.get('rollback_plan', 'Unknown')}\n"
+            f"- Expected Recovery Outcome: {approval_request.get('expected_recovery_outcome', 'Unknown')}\n"
+            f"- Confidence Score: {approval_request.get('confidence_score', confidence)}%\n\n"
+            f"Please reply with APPROVE or REJECT to proceed."
+        )
+
+        # Write simulated email as an approval artifact in the workspace
+        artifact_filename = f"approval_request_{incident_id}.md"
+        workspace_path = f"c:/Coding/Web/Hackathons/SentinalOPS/{artifact_filename}"
+        try:
+            with open(workspace_path, "w", encoding="utf-8") as f:
+                f.write(f"# SentinelOps AI Approval Request\n\n```email\n{email_content}\n```")
+            log_step(incident_id, f"[Governance & Safety Agent] Saved approval request artifact: {artifact_filename}", "INFO")
+        except Exception as e:
+            logger.error(f"Failed to write approval request artifact: {str(e)}")
+
+        log_step(incident_id, "EMAIL_PENDING_INTEGRATION", "WARNING")
+
+        # Update DB status and resolution_action to display email on dashboard
+        db = SessionLocal()
+        try:
+            incident = db.query(Incident).filter(Incident.id == incident_id).first()
+            if incident:
+                incident.status = "PENDING_APPROVAL"
+                incident.risk_level = risk_level
+                incident.resolution_action = f"# Approval Request Email Content\n\n```email\n{email_content}\n```"
+                db.commit()
+        except Exception as e:
+            logger.error(f"Governance failed updating incident in DB: {str(e)}")
+        finally:
+            db.close()
+    else:
+        # LOW and MEDIUM RISK action approved
+        db = SessionLocal()
+        try:
+            incident = db.query(Incident).filter(Incident.id == incident_id).first()
+            if incident:
+                incident.risk_level = risk_level
+                db.commit()
+        except Exception as e:
+            logger.error(f"Governance failed updating risk level in DB: {str(e)}")
+        finally:
+            db.close()
+
+    return {
+        **state,
+        "risk_level": risk_level,
+        "governance_approved": approved,
+        "governance_reason": reason,
+        "next_agent": "incident_commander"
+    }
+
+
 def auditor_node(state: AgentState) -> AgentState:
     """
     Auditor Subagent:
@@ -437,59 +663,67 @@ def auditor_node(state: AgentState) -> AgentState:
     alert_name = state["alert_name"]
     root_cause = state["root_cause"]
     action = state["remediation_choice"]
-    remediation_result = state["remediation_result"]
+    remediation_result = state["remediation_result"] or "None (Requires human approval)"
     confidence = state.get("confidence", "N/A")
     risk_level = state.get("risk_level", "N/A")
     evidence = state.get("evidence", [])
     affected_services = state.get("affected_services", [])
     reasoning_summary = state.get("reasoning_summary", "")
     
-    log_step(incident_id, "[Auditor] Verification loop initialized. Sleeping 5 seconds for service convergence...", "INFO")
-    update_incident_status(incident_id, "VERIFYING")
+    governance_approved = state.get("governance_approved")
     
-    time.sleep(5)
-    
-    log_step(incident_id, f"[Auditor] Action: check_service_health({service})", "AGENT_ACTION")
-    health = check_service_health.invoke({"service_name": service})
-    log_step(incident_id, f"[Auditor] Result: Health status probe output:\n{health}", "AGENT_RESULT")
-    
-    log_step(incident_id, f"[Auditor] Action: get_service_metrics({service})", "AGENT_ACTION")
-    metrics = get_service_metrics.invoke({"service_name": service})
-    log_step(incident_id, f"[Auditor] Result: Metrics values retrieved:\n{metrics}", "AGENT_RESULT")
-    
-    success = False
-    log_step(incident_id, "[Auditor] Thought: Evaluating post-healing telemetry rules...", "AGENT_THOUGHT")
-    
-    health_ok = "Status: 200" in health or '"status": "healthy"' in health or '"status":"healthy"' in health
-    if health_ok:
-        log_step(incident_id, "[Auditor] Heuristics Check: Service returned healthy status code.", "AGENT_THOUGHT")
-        success = True
+    if governance_approved is False:
+        log_step(incident_id, "[Auditor] Bypassing recovery verification loop due to PENDING_APPROVAL status.", "INFO")
+        success = False
+        health = "Health Check: Bypassed. Service execution halted pending human approval."
+        metrics = "Metrics: Bypassed."
     else:
-        log_step(incident_id, "[Auditor] Heuristics Check: Service returned unhealthy status code.", "AGENT_THOUGHT")
+        log_step(incident_id, "[Auditor] Verification loop initialized. Sleeping 5 seconds for service convergence...", "INFO")
+        update_incident_status(incident_id, "VERIFYING")
         
-    try:
-        if llm:
-            prompt = (
-                f"You are the SRE Auditor checking service recovery.\n"
-                f"Service: {service}\n\n"
-                f"--- POST-REMEDIATION TELEMETRY ---\n"
-                f"Health check:\n{health}\n\n"
-                f"Metrics:\n{metrics}\n"
-                f"----------------------------------\n\n"
-                f"Is the service recovered? Answer with 'YES' if health is 200 OK. Otherwise answer 'NO'.\n"
-                f"Response (YES/NO):"
-            )
-            response = llm.invoke([
-                SystemMessage(content="You are an SRE checking service recovery. Answer YES or NO."),
-                HumanMessage(content=prompt)
-            ])
-            content = response.content.strip().upper()
-            log_step(incident_id, f"[Auditor] LLM recovery check: {content}", "AGENT_THOUGHT")
-            if "YES" in content:
-                success = True
-    except Exception as e:
-        logger.error(f"Auditor LLM verification check failed: {str(e)}")
-        log_step(incident_id, "[Auditor] LLM validation check error. Relying on heuristics.", "WARNING")
+        time.sleep(5)
+        
+        log_step(incident_id, f"[Auditor] Action: check_service_health({service})", "AGENT_ACTION")
+        health = check_service_health.invoke({"service_name": service})
+        log_step(incident_id, f"[Auditor] Result: Health status probe output:\n{health}", "AGENT_RESULT")
+        
+        log_step(incident_id, f"[Auditor] Action: get_service_metrics({service})", "AGENT_ACTION")
+        metrics = get_service_metrics.invoke({"service_name": service})
+        log_step(incident_id, f"[Auditor] Result: Metrics values retrieved:\n{metrics}", "AGENT_RESULT")
+        
+        success = False
+        log_step(incident_id, "[Auditor] Thought: Evaluating post-healing telemetry rules...", "AGENT_THOUGHT")
+        
+        health_ok = "Status: 200" in health or '"status": "healthy"' in health or '"status":"healthy"' in health
+        if health_ok:
+            log_step(incident_id, "[Auditor] Heuristics Check: Service returned healthy status code.", "AGENT_THOUGHT")
+            success = True
+        else:
+            log_step(incident_id, "[Auditor] Heuristics Check: Service returned unhealthy status code.", "AGENT_THOUGHT")
+            
+        try:
+            if llm:
+                prompt = (
+                    f"You are the SRE Auditor checking service recovery.\n"
+                    f"Service: {service}\n\n"
+                    f"--- POST-REMEDIATION TELEMETRY ---\n"
+                    f"Health check:\n{health}\n\n"
+                    f"Metrics:\n{metrics}\n"
+                    f"----------------------------------\n\n"
+                    f"Is the service recovered? Answer with 'YES' if health is 200 OK. Otherwise answer 'NO'.\n"
+                    f"Response (YES/NO):"
+                )
+                response = llm.invoke([
+                    SystemMessage(content="You are an SRE checking service recovery. Answer YES or NO."),
+                    HumanMessage(content=prompt)
+                ])
+                content = response.content.strip().upper()
+                log_step(incident_id, f"[Auditor] LLM recovery check: {content}", "AGENT_THOUGHT")
+                if "YES" in content:
+                    success = True
+        except Exception as e:
+            logger.error(f"Auditor LLM verification check failed: {str(e)}")
+            log_step(incident_id, "[Auditor] LLM validation check error. Relying on heuristics.", "WARNING")
         
     resolution_time = 60.0
     db = SessionLocal()
@@ -498,7 +732,10 @@ def auditor_node(state: AgentState) -> AgentState:
         if incident:
             delta = datetime.utcnow() - incident.created_at
             resolution_time = round(delta.total_seconds(), 1)
-            incident.status = "RESOLVED" if success else "FAILED"
+            if governance_approved is False:
+                incident.status = "PENDING_APPROVAL"
+            else:
+                incident.status = "RESOLVED" if success else "FAILED"
             incident.resolution_time_seconds = resolution_time
             db.commit()
     except Exception as e:
@@ -583,6 +820,8 @@ def route_commander(state: AgentState):
         return "metrics_log_analyzer"
     elif next_step == "diagnostics_agent":
         return "diagnostics_agent"
+    elif next_step == "governance_safety":
+        return "governance_safety"
     elif next_step == "remediation_executor":
         return "remediation_executor"
     elif next_step == "auditor":
@@ -599,6 +838,7 @@ workflow = StateGraph(AgentState)
 workflow.add_node("incident_commander", incident_commander_node)
 workflow.add_node("metrics_log_analyzer", metrics_log_analyzer_node)
 workflow.add_node("diagnostics_agent", diagnostics_agent_node)
+workflow.add_node("governance_safety", governance_safety_agent_node)
 workflow.add_node("remediation_executor", remediation_executor_node)
 workflow.add_node("auditor", auditor_node)
 
@@ -608,6 +848,7 @@ workflow.set_entry_point("incident_commander")
 # Register edges back to Incident Commander hub
 workflow.add_edge("metrics_log_analyzer", "incident_commander")
 workflow.add_edge("diagnostics_agent", "incident_commander")
+workflow.add_edge("governance_safety", "incident_commander")
 workflow.add_edge("remediation_executor", "incident_commander")
 workflow.add_edge("auditor", "incident_commander")
 
@@ -618,6 +859,7 @@ workflow.add_conditional_edges(
     {
         "metrics_log_analyzer": "metrics_log_analyzer",
         "diagnostics_agent": "diagnostics_agent",
+        "governance_safety": "governance_safety",
         "remediation_executor": "remediation_executor",
         "auditor": "auditor",
         END: END

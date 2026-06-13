@@ -46,7 +46,7 @@ interface Incident {
   id: string;
   service: string;
   alert_name: string;
-  status: "INVESTIGATING" | "ROOT_CAUSE_FOUND" | "EXECUTING_FIX" | "VERIFYING" | "RESOLVED" | "FAILED";
+  status: "INVESTIGATING" | "ROOT_CAUSE_FOUND" | "EXECUTING_FIX" | "VERIFYING" | "PENDING_APPROVAL" | "RESOLVED" | "FAILED";
   severity: string;
   root_cause?: string;
   confidence?: number;           // 0-100 from RCA
@@ -324,7 +324,7 @@ export default function DashboardPage() {
           
           if (!selectedIncidentId && data.length > 0) {
             const activeIncident = data.find((inc: Incident) => 
-              ["INVESTIGATING", "ROOT_CAUSE_FOUND", "EXECUTING_FIX", "VERIFYING"].includes(inc.status)
+              ["INVESTIGATING", "ROOT_CAUSE_FOUND", "EXECUTING_FIX", "VERIFYING", "PENDING_APPROVAL"].includes(inc.status)
             );
             if (activeIncident) {
               setSelectedIncidentId(activeIncident.id);
@@ -547,6 +547,8 @@ export default function DashboardPage() {
         return <span className="px-2 py-0.5 text-[10px] font-bold tracking-wider rounded border border-amber-200 bg-amber-50 text-amber-600 animate-pulse">REMEDIATING</span>;
       case "VERIFYING":
         return <span className="px-2 py-0.5 text-[10px] font-bold tracking-wider rounded border border-cyan-200 bg-cyan-50 text-cyan-600 animate-pulse">VERIFYING</span>;
+      case "PENDING_APPROVAL":
+        return <span className="px-2 py-0.5 text-[10px] font-bold tracking-wider rounded border border-amber-200 bg-amber-50 text-amber-700 animate-pulse">PENDING APPROVAL</span>;
       case "RESOLVED":
         return <span className="px-2 py-0.5 text-[10px] font-bold tracking-wider rounded border border-emerald-200 bg-emerald-50 text-emerald-600">RESOLVED</span>;
       default:
@@ -572,11 +574,11 @@ export default function DashboardPage() {
   };
 
   const selectedIncident = incidents.find(inc => inc.id === selectedIncidentId);
-  const activeIncidentsCount = incidents.filter(inc => ["INVESTIGATING", "ROOT_CAUSE_FOUND", "EXECUTING_FIX", "VERIFYING"].includes(inc.status)).length;
+  const activeIncidentsCount = incidents.filter(inc => ["INVESTIGATING", "ROOT_CAUSE_FOUND", "EXECUTING_FIX", "VERIFYING", "PENDING_APPROVAL"].includes(inc.status)).length;
   const clusterIsHealthy = Object.values(services).every(s => s.status === "healthy");
 
   const filteredIncidents = filterActive 
-    ? incidents.filter(inc => ["INVESTIGATING", "ROOT_CAUSE_FOUND", "EXECUTING_FIX", "VERIFYING"].includes(inc.status))
+    ? incidents.filter(inc => ["INVESTIGATING", "ROOT_CAUSE_FOUND", "EXECUTING_FIX", "VERIFYING", "PENDING_APPROVAL"].includes(inc.status))
     : incidents;
 
   return (
