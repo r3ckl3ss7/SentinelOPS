@@ -144,3 +144,45 @@ def build_investigation_prompt(alert_name: str, service: str, metrics: str, heal
         f"Perform your full 6-step investigation and return the result as a single valid JSON object.  "
         f"Do not include markdown fences, explanations, or any text outside the JSON."
     )
+
+
+AUDITOR_SYSTEM_PROMPT = """\
+You are the SentinelOps SRE Auditor subagent.
+Your responsibility is to verify the successful recovery of services after a remediation action has been executed, check operational compliance and risk parameters, and compile a professional, detailed Incident Post-Mortem Report.
+"""
+
+
+def build_audit_report_prompt(incident_id: str, service: str, alert_name: str, root_cause: str,
+                              confidence: int, risk_level: str, evidence_str: str,
+                              affected_str: str, reasoning_summary: str, action: str,
+                              remediation_result: str, success: bool, resolution_time: float) -> str:
+    """
+    Build the user prompt for the SRE Auditor to compile the final incident report.
+    """
+    return (
+        f"Compile a professional SRE Incident Post-Mortem and Audit Report.\n\n"
+        f"--- AUDIT META DETAILS ---\n"
+        f"Incident ID: {incident_id}\n"
+        f"Affected Service: {service}\n"
+        f"Triggering Alert: {alert_name}\n"
+        f"Resolution Time: {resolution_time} seconds\n"
+        f"Recovery Verified: {'SUCCESS' if success else 'FAILED'}\n\n"
+        f"--- ROOT CAUSE DIAGNOSIS ---\n"
+        f"Root Cause: {root_cause}\n"
+        f"Diagnosis Confidence: {confidence}%\n"
+        f"Evidence Collected:\n{evidence_str}\n"
+        f"Blast Radius (Affected Services): {affected_str}\n"
+        f"Diagnostics Narrative: {reasoning_summary}\n\n"
+        f"--- EXECUTED ACTION ---\n"
+        f"Action choice: {action}\n"
+        f"Action execution result:\n{remediation_result}\n"
+        f"--------------------------\n\n"
+        f"Please write a structured markdown report containing:\n"
+        f"1. Executive Summary\n"
+        f"2. Incident Timeline\n"
+        f"3. Root Cause Analysis (incorporating confidence and evidence)\n"
+        f"4. Remediation & Action Audit (evaluating compliance, execution output, and risk level: {risk_level})\n"
+        f"5. Verification Summary\n"
+        f"6. Preventative SRE Recommendations"
+    )
+

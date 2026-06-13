@@ -20,7 +20,12 @@ from app.tools import (
     rollback_deployment, 
     scale_service
 )
-from app.sre_system_prompt import SRE_SYSTEM_PROMPT, build_investigation_prompt
+from app.sre_system_prompt import (
+    SRE_SYSTEM_PROMPT, 
+    build_investigation_prompt,
+    AUDITOR_SYSTEM_PROMPT,
+    build_audit_report_prompt
+)
 
 # Logger setup
 logger = logging.getLogger("sentinel-agent")
@@ -44,9 +49,7 @@ except Exception as e:
     logger.error(f"Failed to initialize LLM: {str(e)}")
     llm = None
 
-# ── Runbook name mapping ─────────────────────────────────────────────────
-# The structured prompt uses long-form runbook names; the remediation node
-# uses short internal action names.  This map bridges the two.
+# Runbook name mapping
 RUNBOOK_TO_ACTION = {
     "RESTART_SERVICE": "RESTART",
     "ROLLBACK_DEPLOYMENT": "ROLLBACK",
@@ -63,16 +66,21 @@ class AgentState(TypedDict):
     alert_name: str
     status: str
     root_cause: Optional[str]
-    confidence: Optional[int]                # NEW: 0-100
-    severity: Optional[str]                  # NEW: from LLM
-    risk_level: Optional[str]                # NEW: LOW / MEDIUM / HIGH
-    evidence: Optional[List[str]]            # NEW: supporting evidence items
-    affected_services: Optional[List[str]]   # NEW: blast-radius service list
-    reasoning_summary: Optional[str]         # NEW: LLM reasoning narrative
-    remediation_choice: Optional[str]        # RESTART, ROLLBACK, SCALE, NO_ACTION
+    confidence: Optional[int]
+    severity: Optional[str]
+    risk_level: Optional[str]
+    evidence: Optional[List[str]]
+    affected_services: Optional[List[str]]
+    reasoning_summary: Optional[str]
+    remediation_choice: Optional[str]
     remediation_result: Optional[str]
     verification_success: Optional[bool]
     incident_report: Optional[str]
+    # Multi-agent routing state and collected telemetry cache
+    next_agent: Optional[str]
+    analyzer_logs: Optional[str]
+    analyzer_metrics: Optional[str]
+    analyzer_health: Optional[str]
 
 # Database logging helpers
 def log_step(incident_id: str, message: str, level: str = "INFO"):
@@ -123,21 +131,13 @@ def update_incident_status(incident_id: str, status: str, root_cause: str = None
     finally:
         db.close()
 
-# ── JSON Parsing Helpers ─────────────────────────────────────────────────
-
+# JSON Parsing Helpers
 def _try_parse_json(text: str) -> dict | None:
-    """Attempt to parse the LLM response as JSON.  3-tier approach:
-       1. Direct json.loads on the full text
-       2. Extract a JSON object via regex (handles markdown fences / preamble)
-       3. Return None so the caller can fall back to heuristics
-    """
-    # Tier 1: direct parse
     try:
         return json.loads(text)
     except (json.JSONDecodeError, TypeError):
         pass
 
-    # Tier 2: regex extraction — find the first { ... } block
     match = re.search(r'\{[\s\S]*\}', text)
     if match:
         try:
@@ -145,12 +145,9 @@ def _try_parse_json(text: str) -> dict | None:
         except (json.JSONDecodeError, TypeError):
             pass
 
-    # Tier 3: give up
     return None
 
-
 def _heuristic_diagnosis(alert_name: str, service: str) -> dict:
-    """Deterministic fallback when the LLM is unavailable or returns garbage."""
     if "HighMemoryUsage" in alert_name:
         return {
             "root_cause": "Detected out-of-memory conditions in service logs and memory metrics above threshold.",
@@ -160,7 +157,7 @@ def _heuristic_diagnosis(alert_name: str, service: str) -> dict:
             "evidence": ["Memory usage exceeds 80 MB threshold", "Potential OutOfMemoryError in logs"],
             "affected_services": [service],
             "recommended_runbook": "RESTART_SERVICE",
-            "reasoning_summary": "Memory leak pattern detected.  Restarting the service clears the accumulated heap and restores normal operation."
+            "reasoning_summary": "Memory leak pattern detected. Restarting the service clears the accumulated heap and restores normal operation."
         }
     elif "HighCpuUsage" in alert_name:
         return {
@@ -171,18 +168,18 @@ def _heuristic_diagnosis(alert_name: str, service: str) -> dict:
             "evidence": ["CPU usage ratio exceeds 0.80", "Sustained high utilization"],
             "affected_services": [service],
             "recommended_runbook": "RESTART_SERVICE",
-            "reasoning_summary": "CPU spike pattern detected.  A service restart terminates the runaway workload."
+            "reasoning_summary": "CPU spike pattern detected. A service restart terminates the runaway workload."
         }
     elif "HttpErrorSpike" in alert_name:
         return {
-            "root_cause": "HTTP 500 error count spiked.  Downstream service failure or bad deployment suspected.",
+            "root_cause": "HTTP 500 error count spiked. Downstream service failure or bad deployment suspected.",
             "confidence": 65,
             "severity": "critical",
             "risk_level": "HIGH",
             "evidence": ["Rapid increase in HTTP 500 responses", "Health endpoint returning non-200"],
             "affected_services": [service],
             "recommended_runbook": "ROLLBACK_DEPLOYMENT",
-            "reasoning_summary": "Error spike suggests a deployment regression or dependency failure.  Rolling back the deployment is the safest immediate action."
+            "reasoning_summary": "Error spike suggests a deployment regression or dependency failure. Rolling back the deployment is the safest immediate action."
         }
     else:
         return {
@@ -193,73 +190,166 @@ def _heuristic_diagnosis(alert_name: str, service: str) -> dict:
             "evidence": ["Alert threshold crossed"],
             "affected_services": [service],
             "recommended_runbook": "RESTART_SERVICE",
-            "reasoning_summary": "Insufficient signal to determine root cause with confidence.  Restarting the service as a safe default."
+            "reasoning_summary": "Insufficient signal to determine root cause with confidence. Restarting the service as a safe default."
         }
 
 
-# ── LANGGRAPH NODES ──────────────────────────────────────────────────────
+# ── MULTI-AGENT SUBAGENTS (LANGGRAPH NODES) ───────────────────────────────
 
-def investigate_node(state: AgentState) -> AgentState:
+def incident_commander_node(state: AgentState) -> AgentState:
+    """
+    Incident Commander Subagent:
+    - Central director of the SRE team.
+    - Manages lifecycle coordination, logs step delegation, and makes routing choices based on achievements in state.
+    """
+    incident_id = state["incident_id"]
+    service = state["service"]
+    
+    # 1. Telemetry check
+    has_telemetry = state.get("analyzer_logs") is not None or state.get("analyzer_metrics") is not None
+    if not has_telemetry:
+        log_step(incident_id, f"[Incident Commander] Initializing SRE Multi-Agent team response for incident: {incident_id}.", "INFO")
+        update_incident_status(incident_id, "INVESTIGATING")
+        log_step(incident_id, "[Incident Commander] Action: Routing control to Metrics/Log Analyzer for telemetry collection.", "AGENT_THOUGHT")
+        return {
+            **state,
+            "next_agent": "metrics_log_analyzer",
+            "status": "INVESTIGATING"
+        }
+        
+    # 2. Diagnostics check
+    has_diagnosis = state.get("root_cause") is not None
+    if not has_diagnosis:
+        log_step(incident_id, "[Incident Commander] Telemetry collection completed. Routing control to Diagnostics Agent for root-cause analysis.", "AGENT_THOUGHT")
+        return {
+            **state,
+            "next_agent": "diagnostics_agent"
+        }
+        
+    # 3. Remediation check
+    remediation_choice = state.get("remediation_choice")
+    needs_remediation = remediation_choice is not None and remediation_choice != "NO_ACTION"
+    has_remediation = state.get("remediation_result") is not None
+    
+    if needs_remediation and not has_remediation:
+        log_step(incident_id, f"[Incident Commander] Diagnostics completed: root cause is '{state.get('root_cause')}' ({state.get('confidence', 0)}% confidence). Recommended runbook: {remediation_choice}.", "INFO")
+        log_step(incident_id, f"[Incident Commander] Action: Routing to Remediation Executor to deploy plan: {remediation_choice}.", "AGENT_THOUGHT")
+        return {
+            **state,
+            "next_agent": "remediation_executor"
+        }
+        
+    # 4. Verification/Audit check
+    has_verification = state.get("verification_success") is not None
+    if not has_verification:
+        if not needs_remediation:
+            log_step(incident_id, f"[Incident Commander] Diagnostics completed: root cause is '{state.get('root_cause')}' ({state.get('confidence', 0)}% confidence). Recommended runbook: NO_ACTION.", "INFO")
+            log_step(incident_id, "[Incident Commander] Action: Bypassing remediation (NO_ACTION). Routing directly to Auditor.", "AGENT_THOUGHT")
+        else:
+            log_step(incident_id, "[Incident Commander] Remediation successfully deployed. Routing control to Auditor for recovery verification.", "AGENT_THOUGHT")
+            
+        return {
+            **state,
+            "next_agent": "auditor"
+        }
+        
+    # 5. Final report check (already done by auditor)
+    success = state.get("verification_success", False)
+    status_val = "RESOLVED" if success else "FAILED"
+    log_step(incident_id, f"[Incident Commander] SRE verification & post-mortem complete. Closing incident lifecycle as {status_val}.", "INFO")
+    return {
+        **state,
+        "next_agent": "end"
+    }
+
+
+def metrics_log_analyzer_node(state: AgentState) -> AgentState:
+    """
+    Metrics/Log Analyzer Subagent:
+    - Queries Prometheus metrics and container log streams.
+    - Writes telemetry results to State cache for downstream consumption.
+    """
+    incident_id = state["incident_id"]
+    service = state["service"]
+    
+    log_step(incident_id, f"[Metrics/Log Analyzer] Collecting diagnostic context for '{service}'.", "INFO")
+    
+    log_step(incident_id, f"[Metrics/Log Analyzer] Action: Scrape raw metrics telemetry for {service}", "AGENT_ACTION")
+    metrics = get_service_metrics.invoke({"service_name": service})
+    log_step(incident_id, f"[Metrics/Log Analyzer] Result: Telemetry values returned:\n{metrics}", "AGENT_RESULT")
+    
+    log_step(incident_id, f"[Metrics/Log Analyzer] Action: Query health endpoint /health for {service}", "AGENT_ACTION")
+    health = check_service_health.invoke({"service_name": service})
+    log_step(incident_id, f"[Metrics/Log Analyzer] Result: Health endpoint output:\n{health}", "AGENT_RESULT")
+    
+    log_step(incident_id, f"[Metrics/Log Analyzer] Action: Pull container stdout logs for {service}", "AGENT_ACTION")
+    logs = get_container_logs.invoke({"service_name": service, "lines": 30})
+    truncated_logs = logs[:800] + "..." if len(logs) > 800 else logs
+    log_step(incident_id, f"[Metrics/Log Analyzer] Result: Logs retrieved:\n{truncated_logs}", "AGENT_RESULT")
+    
+    log_step(incident_id, "[Metrics/Log Analyzer] Telemetry parsing completed. Routing control back to Incident Commander.", "INFO")
+    return {
+        **state,
+        "analyzer_logs": logs,
+        "analyzer_metrics": metrics,
+        "analyzer_health": health,
+        "next_agent": "incident_commander"
+    }
+
+
+def diagnostics_agent_node(state: AgentState) -> AgentState:
+    """
+    Diagnostics Agent Subagent:
+    - Analyzes telemetry data collected by the Metrics/Log Analyzer.
+    - Decides on root cause, severity, blast radius, risk level, and runbook.
+    """
     incident_id = state["incident_id"]
     service = state["service"]
     alert_name = state["alert_name"]
     
-    log_step(incident_id, f"Investigation node started for service: {service}", "INFO")
-    update_incident_status(incident_id, "INVESTIGATING")
+    logs = state.get("analyzer_logs") or ""
+    metrics = state.get("analyzer_metrics") or ""
+    health = state.get("analyzer_health") or ""
     
-    # 1. Fetch telemetry
-    log_step(incident_id, "Action: Inspecting service metrics", "AGENT_ACTION")
-    metrics = get_service_metrics.invoke({"service_name": service})
-    log_step(incident_id, f"Result: Service metrics:\n{metrics}", "AGENT_RESULT")
+    log_step(incident_id, f"[Diagnostics Agent] Starting incident diagnosis for service: {service}.", "INFO")
+    update_incident_status(incident_id, "ROOT_CAUSE_FOUND")
     
-    log_step(incident_id, "Action: Inspecting service health endpoint", "AGENT_ACTION")
-    health = check_service_health.invoke({"service_name": service})
-    log_step(incident_id, f"Result: Service health response:\n{health}", "AGENT_RESULT")
+    log_step(incident_id, "[Diagnostics Agent] Thought: Performing correlations between metrics and log failure traces...", "AGENT_THOUGHT")
     
-    log_step(incident_id, "Action: Retrieving container logs", "AGENT_ACTION")
-    logs = get_container_logs.invoke({"service_name": service, "lines": 30})
-    # Truncate logs if too long for db logging
-    truncated_logs = logs[:800] + "..." if len(logs) > 800 else logs
-    log_step(incident_id, f"Result: Service logs:\n{truncated_logs}", "AGENT_RESULT")
-    
-    # 2. Structured RCA reasoning via LLM
-    log_step(incident_id, "Thought: Running structured 6-step Root Cause Analysis...", "AGENT_THOUGHT")
-    
-    # Default values — will be overwritten by LLM or heuristics
     diagnosis = _heuristic_diagnosis(alert_name, service)
     
     try:
-        user_prompt = build_investigation_prompt(alert_name, service, metrics, health, logs)
-        
-        response = llm.invoke([
-            SystemMessage(content=SRE_SYSTEM_PROMPT),
-            HumanMessage(content=user_prompt)
-        ])
-        content = response.content.strip()
-        log_step(incident_id, f"Thought — LLM RCA Output:\n{content}", "AGENT_THOUGHT")
-        
-        # Parse the structured JSON response
-        parsed = _try_parse_json(content)
-        if parsed and "root_cause" in parsed:
-            diagnosis = {
-                "root_cause": parsed.get("root_cause", diagnosis["root_cause"]),
-                "confidence": int(parsed.get("confidence", diagnosis["confidence"])),
-                "severity": str(parsed.get("severity", diagnosis["severity"])).lower(),
-                "risk_level": str(parsed.get("risk_level", diagnosis["risk_level"])).upper(),
-                "evidence": parsed.get("evidence", diagnosis["evidence"]),
-                "affected_services": parsed.get("affected_services", diagnosis["affected_services"]),
-                "recommended_runbook": str(parsed.get("recommended_runbook", diagnosis["recommended_runbook"])).upper(),
-                "reasoning_summary": parsed.get("reasoning_summary", diagnosis["reasoning_summary"]),
-            }
-            log_step(incident_id, "Structured JSON diagnosis parsed successfully.", "INFO")
+        if llm:
+            user_prompt = build_investigation_prompt(alert_name, service, metrics, health, logs)
+            response = llm.invoke([
+                SystemMessage(content=SRE_SYSTEM_PROMPT),
+                HumanMessage(content=user_prompt)
+            ])
+            content = response.content.strip()
+            log_step(incident_id, f"[Diagnostics Agent] Thought — LLM RCA Output:\n{content}", "AGENT_THOUGHT")
+            
+            parsed = _try_parse_json(content)
+            if parsed and "root_cause" in parsed:
+                diagnosis = {
+                    "root_cause": parsed.get("root_cause", diagnosis["root_cause"]),
+                    "confidence": int(parsed.get("confidence", diagnosis["confidence"])),
+                    "severity": str(parsed.get("severity", diagnosis["severity"])).lower(),
+                    "risk_level": str(parsed.get("risk_level", diagnosis["risk_level"])).upper(),
+                    "evidence": parsed.get("evidence", diagnosis["evidence"]),
+                    "affected_services": parsed.get("affected_services", diagnosis["affected_services"]),
+                    "recommended_runbook": str(parsed.get("recommended_runbook", diagnosis["recommended_runbook"])).upper(),
+                    "reasoning_summary": parsed.get("reasoning_summary", diagnosis["reasoning_summary"]),
+                }
+                log_step(incident_id, "[Diagnostics Agent] Structured JSON diagnosis parsed successfully.", "INFO")
+            else:
+                log_step(incident_id, "[Diagnostics Agent] LLM output could not be parsed as structured JSON. Using heuristic fallback.", "WARNING")
         else:
-            log_step(incident_id, "LLM output could not be parsed as structured JSON. Using heuristic fallback.", "WARNING")
+            log_step(incident_id, "[Diagnostics Agent] LLM unavailable. Using heuristic fallback.", "WARNING")
             
     except Exception as e:
-        logger.error(f"LLM Reasoning failed: {str(e)}")
-        log_step(incident_id, f"LLM error: {str(e)}. Falling back to heuristic diagnosis.", "WARNING")
-    
-    # Extract fields from diagnosis
+        logger.error(f"Diagnostics Agent LLM reasoning failed: {str(e)}")
+        log_step(incident_id, f"[Diagnostics Agent] LLM error: {str(e)}. Falling back to heuristic diagnosis.", "WARNING")
+        
     root_cause = diagnosis["root_cause"]
     confidence = diagnosis["confidence"]
     severity = diagnosis["severity"]
@@ -269,15 +359,10 @@ def investigate_node(state: AgentState) -> AgentState:
     reasoning_summary = diagnosis["reasoning_summary"]
     recommended_runbook = diagnosis["recommended_runbook"]
     
-    # Map runbook name to internal action
     remediation_choice = RUNBOOK_TO_ACTION.get(recommended_runbook, "RESTART")
     
-    # Log the rich diagnostic output
-    log_step(incident_id, f"Root cause identified: {root_cause}", "INFO")
-    log_step(incident_id, f"Confidence: {confidence}%  |  Risk Level: {risk_level}  |  Severity: {severity}", "INFO")
-    log_step(incident_id, f"Evidence: {json.dumps(evidence)}", "INFO")
-    log_step(incident_id, f"Affected services (blast radius): {json.dumps(affected_services)}", "INFO")
-    log_step(incident_id, f"Recommended runbook: {recommended_runbook}  →  Action: {remediation_choice}", "INFO")
+    log_step(incident_id, f"[Diagnostics Agent] Root cause: {root_cause}", "INFO")
+    log_step(incident_id, f"[Diagnostics Agent] Confidence: {confidence}% | Risk Level: {risk_level} | Blast Radius: {json.dumps(affected_services)}", "INFO")
     
     update_incident_status(
         incident_id, "ROOT_CAUSE_FOUND",
@@ -298,123 +383,115 @@ def investigate_node(state: AgentState) -> AgentState:
         "evidence": evidence,
         "affected_services": affected_services,
         "reasoning_summary": reasoning_summary,
-        "remediation_choice": remediation_choice
+        "remediation_choice": remediation_choice,
+        "next_agent": "incident_commander"
     }
 
-def remediate_node(state: AgentState) -> AgentState:
+
+def remediation_executor_node(state: AgentState) -> AgentState:
+    """
+    Remediation Executor Subagent:
+    - Dispatches infrastructure recovery procedures matching the remediation_choice.
+    """
     incident_id = state["incident_id"]
     service = state["service"]
     choice = state["remediation_choice"]
     
-    log_step(incident_id, f"Remediation node started. Action target: {choice}", "INFO")
+    log_step(incident_id, f"[Remediation Executor] Starting recovery script execution for service: {service}.", "INFO")
     update_incident_status(incident_id, "EXECUTING_FIX")
     
     result = ""
     if choice == "NO_ACTION":
-        log_step(incident_id, "Agent determined no remediation action is needed. Skipping.", "INFO")
+        log_step(incident_id, "[Remediation Executor] Action: Skipping execution (NO_ACTION recommended).", "INFO")
         result = "No action taken — agent assessed the issue as self-resolving or not actionable."
     elif choice == "RESTART":
-        log_step(incident_id, f"Action: Restarting container for {service}", "AGENT_ACTION")
+        log_step(incident_id, f"[Remediation Executor] Action: restart_service({service})", "AGENT_ACTION")
         result = restart_service.invoke({"service_name": service})
     elif choice == "ROLLBACK":
-        log_step(incident_id, f"Action: Rolling back recent deployment for {service}", "AGENT_ACTION")
+        log_step(incident_id, f"[Remediation Executor] Action: rollback_deployment({service})", "AGENT_ACTION")
         result = rollback_deployment.invoke({"service_name": service})
     elif choice == "SCALE":
-        log_step(incident_id, f"Action: Scaling container {service} to 3 replicas", "AGENT_ACTION")
+        log_step(incident_id, f"[Remediation Executor] Action: scale_service({service}, replicas=3)", "AGENT_ACTION")
         result = scale_service.invoke({"service_name": service, "replicas": 3})
     else:
-        result = f"Unknown remediation option: {choice}. No action taken."
+        result = f"Unknown action selection: {choice}. Execution skipped."
         
-    log_step(incident_id, f"Result: Remediation output:\n{result}", "AGENT_RESULT")
+    log_step(incident_id, f"[Remediation Executor] Result: Output from recovery tool:\n{result}", "AGENT_RESULT")
     update_incident_status(incident_id, "EXECUTING_FIX", action=f"{choice}: {result}")
     
     return {
         **state,
-        "remediation_result": result
+        "remediation_result": result,
+        "next_agent": "incident_commander"
     }
 
-def verify_node(state: AgentState) -> AgentState:
-    incident_id = state["incident_id"]
-    service = state["service"]
-    
-    log_step(incident_id, "Verification node started. Waiting 5s for service convergence...", "INFO")
-    update_incident_status(incident_id, "VERIFYING")
-    
-    time.sleep(5)
-    
-    # 1. Fetch metrics & health again
-    log_step(incident_id, "Action: Inspecting service health endpoint post-remediation", "AGENT_ACTION")
-    health = check_service_health.invoke({"service_name": service})
-    log_step(incident_id, f"Result: Service health response:\n{health}", "AGENT_RESULT")
-    
-    log_step(incident_id, "Action: Inspecting service metrics post-remediation", "AGENT_ACTION")
-    metrics = get_service_metrics.invoke({"service_name": service})
-    log_step(incident_id, f"Result: Service metrics:\n{metrics}", "AGENT_RESULT")
-    
-    # 2. Evaluate Recovery — use both heuristics AND LLM
-    success = False
-    log_step(incident_id, "Thought: Evaluating if system has recovered...", "AGENT_THOUGHT")
-    
-    # Heuristic check (always runs — this is the ground truth)
-    health_ok = "Status: 200" in health or '"status": "healthy"' in health or '"status":"healthy"' in health
-    if health_ok:
-        log_step(incident_id, "Heuristic: Health endpoint returned 200 OK.", "AGENT_THOUGHT")
-        success = True
-    else:
-        log_step(incident_id, "Heuristic: Health endpoint did NOT return 200 OK.", "AGENT_THOUGHT")
 
-    # LLM check (supplementary — can override a negative heuristic, but not a positive one)
-    try:
-        prompt = (
-            f"You are an SRE AI Agent verifying if an incident is resolved.\n"
-            f"Service: {service}\n\n"
-            f"--- POST-REMEDIATION TELEMETRY ---\n"
-            f"Health check:\n{health}\n\n"
-            f"Metrics:\n{metrics}\n"
-            f"----------------------------------\n\n"
-            f"Is the service recovered? Answer with 'YES' if health is 200 OK and metrics are normal. Otherwise answer 'NO'.\n"
-            f"Response (YES/NO):"
-        )
-        response = llm.invoke([
-            SystemMessage(content="You are an SRE checking service recovery. Answer YES or NO."),
-            HumanMessage(content=prompt)
-        ])
-        content = response.content.strip().upper()
-        log_step(incident_id, f"LLM Recovery Evaluation: {content}", "AGENT_THOUGHT")
-        if "YES" in content:
-            success = True
-    except Exception as e:
-        logger.error(f"LLM Recovery Check failed: {str(e)}")
-        log_step(incident_id, f"LLM unavailable for verification, relying on heuristics.", "WARNING")
-            
-    if success:
-        log_step(incident_id, "System recovery verified. All metrics stable.", "INFO")
-    else:
-        log_step(incident_id, "System has NOT recovered or metrics are still outside thresholds.", "WARNING")
-        
-    return {
-        **state,
-        "verification_success": success
-    }
-
-def report_node(state: AgentState) -> AgentState:
+def auditor_node(state: AgentState) -> AgentState:
+    """
+    Auditor Subagent:
+    - Verifies recovery status of the microservice.
+    - Evaluates process compliance, runs LLM audit summaries, and stores the Markdown report.
+    """
     incident_id = state["incident_id"]
     service = state["service"]
     alert_name = state["alert_name"]
     root_cause = state["root_cause"]
     action = state["remediation_choice"]
     remediation_result = state["remediation_result"]
-    success = state["verification_success"]
     confidence = state.get("confidence", "N/A")
     risk_level = state.get("risk_level", "N/A")
     evidence = state.get("evidence", [])
     affected_services = state.get("affected_services", [])
     reasoning_summary = state.get("reasoning_summary", "")
     
-    log_step(incident_id, "Compiling incident report...", "INFO")
+    log_step(incident_id, "[Auditor] Verification loop initialized. Sleeping 5 seconds for service convergence...", "INFO")
+    update_incident_status(incident_id, "VERIFYING")
     
-    # Calculate real resolution time from incident creation
-    resolution_time = 60.0  # fallback
+    time.sleep(5)
+    
+    log_step(incident_id, f"[Auditor] Action: check_service_health({service})", "AGENT_ACTION")
+    health = check_service_health.invoke({"service_name": service})
+    log_step(incident_id, f"[Auditor] Result: Health status probe output:\n{health}", "AGENT_RESULT")
+    
+    log_step(incident_id, f"[Auditor] Action: get_service_metrics({service})", "AGENT_ACTION")
+    metrics = get_service_metrics.invoke({"service_name": service})
+    log_step(incident_id, f"[Auditor] Result: Metrics values retrieved:\n{metrics}", "AGENT_RESULT")
+    
+    success = False
+    log_step(incident_id, "[Auditor] Thought: Evaluating post-healing telemetry rules...", "AGENT_THOUGHT")
+    
+    health_ok = "Status: 200" in health or '"status": "healthy"' in health or '"status":"healthy"' in health
+    if health_ok:
+        log_step(incident_id, "[Auditor] Heuristics Check: Service returned healthy status code.", "AGENT_THOUGHT")
+        success = True
+    else:
+        log_step(incident_id, "[Auditor] Heuristics Check: Service returned unhealthy status code.", "AGENT_THOUGHT")
+        
+    try:
+        if llm:
+            prompt = (
+                f"You are the SRE Auditor checking service recovery.\n"
+                f"Service: {service}\n\n"
+                f"--- POST-REMEDIATION TELEMETRY ---\n"
+                f"Health check:\n{health}\n\n"
+                f"Metrics:\n{metrics}\n"
+                f"----------------------------------\n\n"
+                f"Is the service recovered? Answer with 'YES' if health is 200 OK. Otherwise answer 'NO'.\n"
+                f"Response (YES/NO):"
+            )
+            response = llm.invoke([
+                SystemMessage(content="You are an SRE checking service recovery. Answer YES or NO."),
+                HumanMessage(content=prompt)
+            ])
+            content = response.content.strip().upper()
+            log_step(incident_id, f"[Auditor] LLM recovery check: {content}", "AGENT_THOUGHT")
+            if "YES" in content:
+                success = True
+    except Exception as e:
+        logger.error(f"Auditor LLM verification check failed: {str(e)}")
+        log_step(incident_id, "[Auditor] LLM validation check error. Relying on heuristics.", "WARNING")
+        
+    resolution_time = 60.0
     db = SessionLocal()
     try:
         incident = db.query(Incident).filter(Incident.id == incident_id).first()
@@ -425,106 +502,127 @@ def report_node(state: AgentState) -> AgentState:
             incident.resolution_time_seconds = resolution_time
             db.commit()
     except Exception as e:
-        logger.error(f"Failed to save resolution time to DB: {str(e)}")
+        logger.error(f"Auditor failed writing status info to DB: {str(e)}")
     finally:
         db.close()
-    
-    # Format evidence and affected services for the report prompt
+        
+    log_step(incident_id, "[Auditor] Action: Compiling final Markdown Post-Mortem Report", "INFO")
     evidence_str = "\n".join(f"  - {e}" for e in evidence) if evidence else "  - No specific evidence collected"
     affected_str = ", ".join(affected_services) if affected_services else service
     
-    # Generate report markdown
-    prompt = (
-        f"Generate a professional Incident Post-Mortem Report in Markdown format.\n"
-        f"Incident ID: {incident_id}\n"
-        f"Affected Service: {service}\n"
-        f"Triggering Alert: {alert_name}\n"
-        f"Root Cause: {root_cause}\n"
-        f"Confidence Score: {confidence}%\n"
-        f"Risk Level: {risk_level}\n"
-        f"Supporting Evidence:\n{evidence_str}\n"
-        f"Blast Radius (Affected Services): {affected_str}\n"
-        f"Agent Reasoning: {reasoning_summary}\n"
-        f"Actions Taken: {action} ({remediation_result})\n"
-        f"Recovery Verified: {success}\n"
-        f"Resolution Time: {resolution_time} seconds\n\n"
-        f"Please write a structured report with Sections: Executive Summary, Incident Timeline, "
-        f"Root Cause Analysis (including confidence and evidence), Blast Radius Assessment, "
-        f"Actions Taken, Risk Assessment, and Prevention Steps."
-    )
-    
     report_content = ""
     try:
-        response = llm.invoke([
-            SystemMessage(content="You are an expert SRE writer. Write structured Markdown post-mortem reports."),
-            HumanMessage(content=prompt)
-        ])
-        report_content = response.content.strip()
+        if llm:
+            audit_prompt = build_audit_report_prompt(
+                incident_id=incident_id,
+                service=service,
+                alert_name=alert_name,
+                root_cause=root_cause,
+                confidence=confidence,
+                risk_level=risk_level,
+                evidence_str=evidence_str,
+                affected_str=affected_str,
+                reasoning_summary=reasoning_summary,
+                action=action,
+                remediation_result=remediation_result,
+                success=success,
+                resolution_time=resolution_time
+            )
+            response = llm.invoke([
+                SystemMessage(content=AUDITOR_SYSTEM_PROMPT),
+                HumanMessage(content=audit_prompt)
+            ])
+            report_content = response.content.strip()
+        else:
+            raise Exception("LLM unavailable")
     except Exception as e:
-        logger.error(f"Failed to generate report using LLM: {str(e)}")
-        # Markdown fallback
+        logger.warning(f"Auditor failed compiling LLM report: {str(e)}. Writing markdown fallback report.")
         report_content = (
-            f"# Incident Post-Mortem Report - {incident_id}\n\n"
+            f"# SRE Incident Post-Mortem and Audit Report - {incident_id}\n\n"
             f"## Executive Summary\n"
-            f"An incident was triggered on **{service}** due to **{alert_name}** alert. "
-            f"Remediation was executed automatically by the SentinelOps AI SRE Agent.\n\n"
+            f"An incident was triggered on **{service}** due to **{alert_name}** alert.\n"
+            f"Remediation choice '{action}' was executed by SRE team.\n\n"
             f"## Root Cause Analysis\n"
             f"* **Root Cause:** {root_cause}\n"
-            f"* **Confidence:** {confidence}%\n"
-            f"* **Risk Level:** {risk_level}\n\n"
-            f"### Supporting Evidence\n"
-            f"{evidence_str}\n\n"
-            f"## Blast Radius\n"
-            f"* **Affected Services:** {affected_str}\n\n"
-            f"## Actions Taken\n"
-            f"* **Runbook Executed:** {action}\n"
+            f"* **Confidence:** {confidence}%\n\n"
+            f"## Actions & Remediation Audit\n"
+            f"* **Action Choice:** {action}\n"
             f"* **Result:** {remediation_result}\n"
-            f"* **Resolution Status:** {'Success' if success else 'Failed'}\n"
-            f"* **MTTR:** {resolution_time}s\n\n"
-            f"## Agent Reasoning\n"
-            f"{reasoning_summary}\n"
+            f"* **Compliance Risk Level:** {risk_level}\n\n"
+            f"## Verification & Resolution Summary\n"
+            f"* **Success:** {success}\n"
+            f"* **MTTR:** {resolution_time}s\n"
         )
         
-    log_step(incident_id, "Incident report compiled successfully.", "INFO")
-    
-    # Store report content back in DB
     db = SessionLocal()
     try:
         incident = db.query(Incident).filter(Incident.id == incident_id).first()
         if incident:
-            incident.root_cause = root_cause
             incident.resolution_action = report_content
             db.commit()
     except Exception as e:
-        logger.error(f"Failed to store final report: {str(e)}")
+        logger.error(f"Auditor failed storing post-mortem in DB: {str(e)}")
     finally:
         db.close()
         
-    # Mark overall incident lifecycle complete
-    log_step(incident_id, f"Incident {incident_id} is closed. Status: {'RESOLVED' if success else 'FAILED'}", "INFO")
+    log_step(incident_id, f"[Auditor] Markdown Post-Mortem compiled successfully. Verification result: {'SUCCESS' if success else 'FAILED'}.", "INFO")
     
     return {
         **state,
-        "incident_report": report_content
+        "verification_success": success,
+        "incident_report": report_content,
+        "next_agent": "incident_commander"
     }
 
-# Build LangGraph State Machine
+
+# ── LANGGRAPH ROUTING LOGIC ───────────────────────────────────────────────
+
+def route_commander(state: AgentState):
+    next_step = state.get("next_agent")
+    if next_step == "metrics_log_analyzer":
+        return "metrics_log_analyzer"
+    elif next_step == "diagnostics_agent":
+        return "diagnostics_agent"
+    elif next_step == "remediation_executor":
+        return "remediation_executor"
+    elif next_step == "auditor":
+        return "auditor"
+    else:
+        return END
+
+
+# ── BUILD LANGGRAPH STATE MACHINE ─────────────────────────────────────────
+
 workflow = StateGraph(AgentState)
 
 # Add Nodes
-workflow.add_node("investigate", investigate_node)
-workflow.add_node("remediate", remediate_node)
-workflow.add_node("verify", verify_node)
-workflow.add_node("report", report_node)
+workflow.add_node("incident_commander", incident_commander_node)
+workflow.add_node("metrics_log_analyzer", metrics_log_analyzer_node)
+workflow.add_node("diagnostics_agent", diagnostics_agent_node)
+workflow.add_node("remediation_executor", remediation_executor_node)
+workflow.add_node("auditor", auditor_node)
 
-# Set Entrance Node
-workflow.set_entry_point("investigate")
+# Set entry point
+workflow.set_entry_point("incident_commander")
 
-# Add edges (linear state machine for MVP reliability)
-workflow.add_edge("investigate", "remediate")
-workflow.add_edge("remediate", "verify")
-workflow.add_edge("verify", "report")
-workflow.add_edge("report", END)
+# Register edges back to Incident Commander hub
+workflow.add_edge("metrics_log_analyzer", "incident_commander")
+workflow.add_edge("diagnostics_agent", "incident_commander")
+workflow.add_edge("remediation_executor", "incident_commander")
+workflow.add_edge("auditor", "incident_commander")
 
-# Compile
+# Add conditional edges from Incident Commander
+workflow.add_conditional_edges(
+    "incident_commander",
+    route_commander,
+    {
+        "metrics_log_analyzer": "metrics_log_analyzer",
+        "diagnostics_agent": "diagnostics_agent",
+        "remediation_executor": "remediation_executor",
+        "auditor": "auditor",
+        END: END
+    }
+)
+
+# Compile SRE agent app
 agent_app = workflow.compile()
