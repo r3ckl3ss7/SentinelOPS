@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useState, useRef } from "react";
+import { useState, useEffect, useRef } from "react";
+import Link from "next/link";
 import { 
   Activity, 
   AlertTriangle, 
@@ -14,285 +15,250 @@ import {
   RefreshCw, 
   Server, 
   Terminal, 
-  Trash2, 
   ArrowRight,
-  Download,
-  AlertOctagon,
   Clock,
   Shield,
   Target,
   Zap,
-  Menu,
   ChevronRight,
   ExternalLink,
-  User,
-  Rocket,
-  Settings
+  Code,
+  Layout,
+  Radio,
+  FileText
 } from "lucide-react";
 
-// Get API base URL
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+interface SimulationStep {
+  title: string;
+  badge: string;
+  icon: any;
+  color: string;
+  logs: string[];
+}
 
-interface ServiceMetric {
+interface Scenario {
   name: string;
-  status: "healthy" | "unhealthy" | "offline";
-  cpu: number; // ratio
-  memory: number; // MB
-  faults_injected: boolean;
-}
-
-interface Incident {
-  id: string;
   service: string;
-  alert_name: string;
-  status: "INVESTIGATING" | "ROOT_CAUSE_FOUND" | "EXECUTING_FIX" | "VERIFYING" | "RESOLVED" | "FAILED";
-  severity: string;
-  root_cause?: string;
-  confidence?: number;           // 0-100 from RCA
-  risk_level?: string;           // LOW / MEDIUM / HIGH
-  evidence?: string;             // JSON string: list of evidence items
-  affected_services?: string;    // JSON string: list of service names
-  reasoning_summary?: string;    // LLM reasoning narrative
-  resolution_action?: string;
-  resolution_time_seconds?: number;
-  created_at: string;
-  updated_at: string;
+  anomaly: string;
+  steps: SimulationStep[];
 }
 
-interface IncidentLog {
-  id: number;
-  incident_id: string;
-  timestamp: string;
-  level: "INFO" | "WARNING" | "ERROR" | "AGENT_THOUGHT" | "AGENT_ACTION" | "AGENT_RESULT";
-  message: string;
-}
-
-export default function Home() {
-  const [services, setServices] = useState<Record<string, ServiceMetric>>({});
-  const [incidents, setIncidents] = useState<Incident[]>([]);
-  const [selectedIncidentId, setSelectedIncidentId] = useState<string | null>(null);
-  const [logs, setLogs] = useState<IncidentLog[]>([]);
-  const [loadingServices, setLoadingServices] = useState(true);
-  const [injectingFault, setInjectingFault] = useState<string | null>(null);
-  const [clearingFaults, setClearingFaults] = useState(false);
-  const [filterActive, setFilterActive] = useState(false);
-
-  const consoleRef = useRef<HTMLDivElement>(null);
-
-  // Poll service status and incident list
-  useEffect(() => {
-    const fetchData = async () => {
-      try {
-        // Fetch services status
-        const sRes = await fetch(`${API_URL}/api/v1/simulation/status`);
-        if (sRes.ok) {
-          const data = await sRes.json();
-          setServices(data);
-        }
-        setLoadingServices(false);
-
-        // Fetch incidents list
-        const iRes = await fetch(`${API_URL}/api/v1/incidents`);
-        if (iRes.ok) {
-          const data = await iRes.json();
-          setIncidents(data);
-          
-          // Auto-select latest active incident if none selected
-          if (!selectedIncidentId && data.length > 0) {
-            const activeIncident = data.find((inc: Incident) => 
-              ["INVESTIGATING", "ROOT_CAUSE_FOUND", "EXECUTING_FIX", "VERIFYING"].includes(inc.status)
-            );
-            if (activeIncident) {
-              setSelectedIncidentId(activeIncident.id);
-            } else {
-              setSelectedIncidentId(data[0].id);
-            }
-          }
-        }
-      } catch (err) {
-        console.error("Failed to fetch dashboard data:", err);
+const SCENARIOS: Record<string, Scenario> = {
+  memory: {
+    name: "Memory Leak (OOM Anomaly)",
+    service: "payment-service",
+    anomaly: "HighMemoryUsage",
+    steps: [
+      {
+        title: "Investigate Node",
+        badge: "DIAGNOSING",
+        icon: Target,
+        color: "text-purple-600 border-purple-200 bg-purple-50",
+        logs: [
+          "[10:14:02] ALERT received: HighMemoryUsage on payment-service",
+          "[10:14:03] Node INVESTIGATE: Querying Prometheus telemetry metrics...",
+          "[10:14:04] payment-service RAM usage is 98MB (Limit 80MB). Status: Unhealthy.",
+          "[10:14:05] Querying logs... Found trace: java.lang.OutOfMemoryError",
+          "[10:14:06] LLM Diagnosis: Fatal memory exhaustion due to transaction thread heap leak."
+        ]
+      },
+      {
+        title: "Remediate Node",
+        badge: "REMEDIATING",
+        icon: Zap,
+        color: "text-amber-600 border-amber-200 bg-amber-50",
+        logs: [
+          "[10:14:07] Node REMEDIATE: Selecting mitigation plan: CONTAINER_RESTART",
+          "[10:14:08] Executing Docker command: docker restart sentinelops-payment-1",
+          "[10:14:09] Container sentinelops-payment-1 restarted successfully (Exit Code 0).",
+          "[10:14:09] Telemetry reset. Memory allocations cleared."
+        ]
+      },
+      {
+        title: "Verify Node",
+        badge: "VERIFYING",
+        icon: Shield,
+        color: "text-cyan-700 border-cyan-200 bg-cyan-50",
+        logs: [
+          "[10:14:10] Node VERIFY: Waiting 5 seconds for service convergence...",
+          "[10:14:15] Pinging health probe on http://payment-service:8004/health",
+          "[10:14:16] Response: 200 OK. RAM: 24MB. Status: Healthy.",
+          "[10:14:17] LLM Verification: System confirmed stable. No cascading anomalies."
+        ]
+      },
+      {
+        title: "Report Node",
+        badge: "RESOLVED",
+        icon: CheckCircle,
+        color: "text-emerald-600 border-emerald-200 bg-emerald-50",
+        logs: [
+          "[10:14:18] Node REPORT: Generating markdown incident post-mortem report...",
+          "[10:14:19] Report saved to Database (Incident ID: INC-4890). MTTR: 17 seconds.",
+          "[10:14:20] Alert resolved. Operations Console resumed monitoring."
+        ]
       }
+    ]
+  },
+  cpu: {
+    name: "CPU Spike (Busy Loop)",
+    service: "order-service",
+    anomaly: "HighCpuUsage",
+    steps: [
+      {
+        title: "Investigate Node",
+        badge: "DIAGNOSING",
+        icon: Target,
+        color: "text-purple-600 border-purple-200 bg-purple-50",
+        logs: [
+          "[18:02:11] ALERT received: HighCpuUsage on order-service",
+          "[18:02:12] Node INVESTIGATE: Fetching target container metrics...",
+          "[18:02:13] order-service CPU load at 97% (Threshold 80%).",
+          "[18:02:14] Examining stdout logs... Detected recurring busy-loop thread on route /checkout.",
+          "[18:02:15] LLM Diagnosis: Core thread lockup in order checkout routine."
+        ]
+      },
+      {
+        title: "Remediate Node",
+        badge: "REMEDIATING",
+        icon: Zap,
+        color: "text-amber-600 border-amber-200 bg-amber-50",
+        logs: [
+          "[18:02:16] Node REMEDIATE: Selecting mitigation plan: REBOOT_WORKERS",
+          "[18:02:17] Clearing lock threads and restarting order-processing workers...",
+          "[18:02:18] Remediated order-service container state."
+        ]
+      },
+      {
+        title: "Verify Node",
+        badge: "VERIFYING",
+        icon: Shield,
+        color: "text-cyan-700 border-cyan-200 bg-cyan-50",
+        logs: [
+          "[18:02:19] Node VERIFY: Cooling down telemetry sensors...",
+          "[18:02:24] Scraping Prometheus metric: process_cpu_seconds_total",
+          "[18:02:25] order-service CPU load stabilized at 4.2%.",
+          "[18:02:26] Synthetic endpoint check returned 200 OK (Latency: 12ms)."
+        ]
+      },
+      {
+        title: "Report Node",
+        badge: "RESOLVED",
+        icon: CheckCircle,
+        color: "text-emerald-600 border-emerald-200 bg-emerald-50",
+        logs: [
+          "[18:02:27] Node REPORT: Assembling Incident Report INC-4891.",
+          "[18:02:28] Post-mortem compiled. Total resolution time (MTTR): 17 seconds."
+        ]
+      }
+    ]
+  },
+  http: {
+    name: "HTTP 500 Storm (Failure)",
+    service: "api-gateway",
+    anomaly: "HttpErrorSpike",
+    steps: [
+      {
+        title: "Investigate Node",
+        badge: "DIAGNOSING",
+        icon: Target,
+        color: "text-purple-600 border-purple-200 bg-purple-50",
+        logs: [
+          "[03:41:50] ALERT received: HttpErrorSpike on api-gateway",
+          "[03:41:51] Node INVESTIGATE: Inspecting gateway routing statistics...",
+          "[03:41:52] Detected 48 errors/min on downstream user-service calls.",
+          "[03:41:53] Checking user-service status... Found DB connection pool timeout.",
+          "[03:41:54] LLM Diagnosis: Database pool exhaustion in user-service leading to gateway HTTP 500 failures."
+        ]
+      },
+      {
+        title: "Remediate Node",
+        badge: "REMEDIATING",
+        icon: Zap,
+        color: "text-amber-600 border-amber-200 bg-amber-50",
+        logs: [
+          "[03:41:55] Node REMEDIATE: Action plan: RECYCLE_DB_POOL & SERVICE_RESTART",
+          "[03:41:56] Restarting postgres connection manager & user-service container...",
+          "[03:41:57] Database pools recycled. Container reboot complete."
+        ]
+      },
+      {
+        title: "Verify Node",
+        badge: "VERIFYING",
+        icon: Shield,
+        color: "text-cyan-700 border-cyan-200 bg-cyan-50",
+        logs: [
+          "[03:41:58] Node VERIFY: Executing verification suite...",
+          "[03:42:03] curl http://api-gateway:8001/orders -> 200 OK (0.015s).",
+          "[03:42:04] HTTP Error Rate dropped to 0.0%."
+        ]
+      },
+      {
+        title: "Report Node",
+        badge: "RESOLVED",
+        icon: CheckCircle,
+        color: "text-emerald-600 border-emerald-200 bg-emerald-50",
+        logs: [
+          "[03:42:05] Node REPORT: Writing Incident Report INC-4892.",
+          "[03:42:06] Incident resolved. MTTR: 16 seconds."
+        ]
+      }
+    ]
+  }
+};
+
+export default function LandingPage() {
+  const [activeScenario, setActiveScenario] = useState<string>("memory");
+  const [activeStep, setActiveStep] = useState<number>(0);
+  const [isPlaying, setIsPlaying] = useState<boolean>(true);
+  const [typedLogs, setTypedLogs] = useState<string[]>([]);
+  const intervalRef = useRef<any>(null);
+
+  const scenario = SCENARIOS[activeScenario];
+
+  // Auto-play the simulator steps
+  useEffect(() => {
+    if (isPlaying) {
+      intervalRef.current = setInterval(() => {
+        setActiveStep((prev) => (prev + 1) % scenario.steps.length);
+      }, 5000);
+    } else {
+      if (intervalRef.current) clearInterval(intervalRef.current);
+    }
+    return () => {
+      if (intervalRef.current) clearInterval(intervalRef.current);
     };
+  }, [isPlaying, scenario]);
 
-    fetchData();
-    const interval = setInterval(fetchData, 2000);
-    return () => clearInterval(interval);
-  }, [selectedIncidentId]);
-
-  // Poll logs when an incident is selected
+  // Simulating typewriter/log lines output
   useEffect(() => {
-    if (!selectedIncidentId) {
-      setLogs([]);
-      return;
+    const logsToShow: string[] = [];
+    // Show logs from previous steps + current step
+    for (let i = 0; i <= activeStep; i++) {
+      logsToShow.push(...scenario.steps[i].logs);
     }
+    setTypedLogs(logsToShow);
+  }, [activeStep, activeScenario, scenario]);
 
-    const fetchLogs = async () => {
-      try {
-        const res = await fetch(`${API_URL}/api/v1/incidents/${selectedIncidentId}/logs`);
-        if (res.ok) {
-          const data = await res.json();
-          setLogs(data);
-        }
-      } catch (err) {
-        console.error("Failed to fetch logs:", err);
-      }
-    };
-
-    fetchLogs();
-    const logInterval = setInterval(fetchLogs, 1500);
-    return () => clearInterval(logInterval);
-  }, [selectedIncidentId]);
-
-  // Auto-scroll logs terminal container only (does not scroll the main window)
-  useEffect(() => {
-    if (consoleRef.current) {
-      consoleRef.current.scrollTop = consoleRef.current.scrollHeight;
-    }
-  }, [logs]);
-
-  // Inject a fault
-  const injectFault = async (service: string, fault: string) => {
-    const key = `${service}-${fault}`;
-    setInjectingFault(key);
-    try {
-      const res = await fetch(`${API_URL}/api/v1/simulation/inject`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ service, fault })
-      });
-      if (res.ok) {
-        console.log(`Fault ${fault} injected into ${service}`);
-      }
-    } catch (err) {
-      console.error("Fault injection failed:", err);
-    } finally {
-      setInjectingFault(null);
-    }
+  const changeScenario = (key: string) => {
+    setActiveScenario(key);
+    setActiveStep(0);
   };
 
-  // Clear all faults
-  const clearAllFaults = async () => {
-    setClearingFaults(true);
-    try {
-      const res = await fetch(`${API_URL}/api/v1/simulation/clear`, {
-        method: "POST"
-      });
-      if (res.ok) {
-        console.log("All faults cleared.");
-      }
-    } catch (err) {
-      console.error("Failed to clear faults:", err);
-    } finally {
-      setClearingFaults(false);
-    }
+  const handleStepClick = (idx: number) => {
+    setIsPlaying(false);
+    setActiveStep(idx);
   };
-
-  // Trigger demo simulation and scroll down
-  const startDemo = async () => {
-    // Auto inject memory leak to payment-service to spin up the SRE flow
-    await injectFault("payment-service", "memory-leak");
-    
-    // Smooth scroll to operations center
-    const opsCenter = document.getElementById("ops-center");
-    if (opsCenter) {
-      opsCenter.scrollIntoView({ behavior: "smooth" });
-    }
-  };
-
-  const scrollToTop = () => {
-    window.scrollTo({ top: 0, behavior: "smooth" });
-  };
-
-  // Helper to format timestamps
-  const formatTime = (isoString: string) => {
-    try {
-      const d = new Date(isoString);
-      return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-    } catch {
-      return isoString;
-    }
-  };
-
-  // Parse JSON string fields from the backend
-  const parseJsonField = (jsonStr?: string): string[] => {
-    if (!jsonStr) return [];
-    try {
-      const parsed = JSON.parse(jsonStr);
-      return Array.isArray(parsed) ? parsed : [];
-    } catch {
-      return [];
-    }
-  };
-
-  const getRiskColor = (risk?: string) => {
-    switch (risk?.toUpperCase()) {
-      case "HIGH": return { border: "border-red-200", bg: "bg-red-50", text: "text-red-600" };
-      case "MEDIUM": return { border: "border-amber-200", bg: "bg-amber-50", text: "text-amber-700" };
-      case "LOW": return { border: "border-emerald-200", bg: "bg-emerald-50", text: "text-emerald-700" };
-      default: return { border: "border-slate-200", bg: "bg-slate-50", text: "text-slate-600" };
-    }
-  };
-
-  const getStatusColor = (status: string) => {
-    switch (status) {
-      case "healthy": return "text-emerald-600 border-emerald-100 bg-emerald-50";
-      case "unhealthy": return "text-red-600 border-red-100 bg-red-50";
-      default: return "text-slate-500 border-slate-100 bg-slate-50";
-    }
-  };
-
-  const getIncidentStatusBadge = (status: string) => {
-    switch (status) {
-      case "INVESTIGATING":
-        return <span className="px-2 py-0.5 text-[10px] font-bold tracking-wider rounded border border-purple-200 bg-purple-50 text-purple-600 animate-pulse">INVESTIGATING</span>;
-      case "ROOT_CAUSE_FOUND":
-        return <span className="px-2 py-0.5 text-[10px] font-bold tracking-wider rounded border border-indigo-200 bg-indigo-50 text-indigo-600 animate-pulse">DIAGNOSING</span>;
-      case "EXECUTING_FIX":
-        return <span className="px-2 py-0.5 text-[10px] font-bold tracking-wider rounded border border-amber-200 bg-amber-50 text-amber-600 animate-pulse">REMEDIATING</span>;
-      case "VERIFYING":
-        return <span className="px-2 py-0.5 text-[10px] font-bold tracking-wider rounded border border-cyan-200 bg-cyan-50 text-cyan-600 animate-pulse">VERIFYING</span>;
-      case "RESOLVED":
-        return <span className="px-2 py-0.5 text-[10px] font-bold tracking-wider rounded border border-emerald-200 bg-emerald-50 text-emerald-600">RESOLVED</span>;
-      default:
-        return <span className="px-2 py-0.5 text-[10px] font-bold tracking-wider rounded border border-red-200 bg-red-50 text-red-600">FAILED</span>;
-    }
-  };
-
-  const getLogStyle = (level: string) => {
-    switch (level) {
-      case "AGENT_THOUGHT":
-        return "text-cyan-300 italic font-mono";
-      case "AGENT_ACTION":
-        return "text-amber-400 font-semibold font-mono";
-      case "AGENT_RESULT":
-        return "text-slate-300 font-mono bg-slate-900/60 p-2.5 rounded border border-slate-800 my-1.5 block whitespace-pre-wrap text-[11px]";
-      case "ERROR":
-        return "text-red-400 font-semibold font-mono animate-pulse";
-      case "WARNING":
-        return "text-amber-400 font-mono";
-      default:
-        return "text-slate-300 font-mono";
-    }
-  };
-
-  const selectedIncident = incidents.find(inc => inc.id === selectedIncidentId);
-  const activeIncidentsCount = incidents.filter(inc => ["INVESTIGATING", "ROOT_CAUSE_FOUND", "EXECUTING_FIX", "VERIFYING"].includes(inc.status)).length;
-  const clusterIsHealthy = Object.values(services).every(s => s.status === "healthy");
-
-  const filteredIncidents = filterActive 
-    ? incidents.filter(inc => ["INVESTIGATING", "ROOT_CAUSE_FOUND", "EXECUTING_FIX", "VERIFYING"].includes(inc.status))
-    : incidents;
 
   return (
     <div className="relative min-h-screen bg-[#f8fafc] text-slate-800 flex flex-col font-sans overflow-x-hidden">
       
-      {/* Decorative Background Shapes matching the template */}
+      {/* Decorative Background Shapes */}
       <div className="absolute top-0 left-0 w-[500px] h-[500px] rounded-full bg-gradient-to-br from-blue-100/30 via-cyan-50/20 to-transparent blur-3xl pointer-events-none -z-10" />
       <div className="absolute top-[-100px] right-[-100px] w-[450px] h-[450px] rounded-full bg-gradient-to-br from-[#0942e6] to-[#0033cc] opacity-[0.95] pointer-events-none -z-10 shadow-2xl" />
       <div className="absolute top-[35%] right-[-150px] w-[350px] h-[350px] rounded-full border-[45px] border-[#00d2d3]/25 pointer-events-none -z-10" />
       <div className="absolute bottom-[20%] left-[-150px] w-[450px] h-[450px] rounded-full bg-cyan-100/30 blur-3xl pointer-events-none -z-10" />
 
-      {/* Top Navbar */}
+      {/* Header */}
       <header className="border-b border-slate-100/80 bg-white/70 backdrop-blur-md px-8 py-4 flex items-center justify-between sticky top-0 z-50">
         <div className="flex items-center space-x-3">
           <div className="p-2 rounded-lg bg-blue-600/10 border border-blue-600/20 text-blue-600">
@@ -306,11 +272,9 @@ export default function Home() {
           </div>
         </div>
 
-        {/* Center menu navigation links from the template */}
         <nav className="hidden md:flex space-x-8 text-xs font-bold tracking-wider text-slate-500 font-sans">
-          <a href="#" className="hover:text-blue-600 transition-colors uppercase">Dashboard</a>
-          <a href="#ops-center" className="hover:text-blue-600 transition-colors uppercase">Operations Center</a>
-          <a href="#capabilities" className="hover:text-blue-600 transition-colors uppercase">Capabilities</a>
+          <Link href="/" className="text-blue-600 border-b-2 border-blue-600 pb-1 uppercase font-extrabold">About</Link>
+          <Link href="/dashboard" className="hover:text-blue-600 transition-colors uppercase">Console</Link>
           <a href="http://localhost:8000/docs" target="_blank" rel="noopener noreferrer" className="hover:text-blue-600 transition-colors uppercase flex items-center gap-1">
             <span>API Docs</span>
             <ExternalLink className="h-3 w-3" />
@@ -318,478 +282,527 @@ export default function Home() {
         </nav>
 
         <div className="flex items-center space-x-4">
-          {/* Reset button styled as the outline nav button in the template */}
-          <button
-            onClick={clearAllFaults}
-            disabled={clearingFaults}
-            className="flex items-center space-x-1.5 px-5 py-2 text-xs font-bold tracking-wider border-2 border-blue-600 text-blue-600 hover:bg-blue-600 hover:text-white rounded-full transition-all duration-200 disabled:opacity-50"
-          >
-            <RefreshCw className={`h-3 w-3 ${clearingFaults ? "animate-spin" : ""}`} />
-            <span>{clearingFaults ? "Clearing..." : "Reset Cluster"}</span>
-          </button>
-          
-          <div className="p-2 rounded-full hover:bg-slate-50 text-slate-700 transition-colors cursor-pointer">
-            <User className="h-4.5 w-4.5" />
+          <div className="hidden lg:flex items-center space-x-2.5 px-3 py-1.5 rounded-full border border-slate-200 bg-slate-50 text-[10px] font-mono font-medium text-slate-600">
+            <Radio className="h-3.5 w-3.5 text-emerald-500 animate-pulse" />
+            <span>LLM: qwen2.5:3b</span>
           </div>
+
+          <Link
+            href="/dashboard"
+            className="flex items-center space-x-1.5 px-5 py-2 text-xs font-bold tracking-wider bg-blue-600 hover:bg-blue-700 text-white rounded-full transition-all duration-200 shadow-md shadow-blue-500/15 hover:-translate-y-0.5"
+          >
+            <span>Launch Console</span>
+            <ArrowRight className="h-3.5 w-3.5" />
+          </Link>
         </div>
       </header>
 
-      {/* Hero Section & Generated Vector SRE Graphic */}
-      <section className="px-8 py-12 md:py-16 grid grid-cols-1 lg:grid-cols-12 gap-12 items-center max-w-[1400px] mx-auto w-full">
+      {/* Hero Section */}
+      <section className="px-8 pt-16 pb-24 grid grid-cols-1 lg:grid-cols-12 gap-16 items-center max-w-[1400px] mx-auto w-full">
         
-        {/* Left Side: Copywriter Hero */}
-        <div className="lg:col-span-5 flex flex-col items-start text-left">
-          <h2 className="text-slate-900 font-heading font-extrabold text-3xl sm:text-4xl lg:text-[44px] leading-[1.15] tracking-tight uppercase mb-6">
-            You can access all your <span className="gradient-text">service telemetry</span> in one place
+        {/* Left Side Info */}
+        <div className="lg:col-span-6 flex flex-col items-start text-left">
+          <div className="inline-flex items-center space-x-2 px-3 py-1 rounded-full border border-blue-200 bg-blue-50 text-xs font-mono font-bold text-blue-600 mb-6 uppercase tracking-wider">
+            <Shield className="h-4 w-4" />
+            <span>100% Autonomous Incident Recovery</span>
+          </div>
+          
+          <h2 className="text-slate-800 font-heading font-black text-4xl sm:text-5xl lg:text-[52px] leading-[1.1] tracking-tight mb-6 uppercase">
+            Resolving system <br />
+            outages in <span className="text-transparent bg-clip-text bg-gradient-to-r from-blue-600 via-cyan-500 to-indigo-600 font-extrabold">seconds</span>, not hours.
           </h2>
-          <p className="text-slate-500 text-sm sm:text-base mb-8 leading-relaxed max-w-lg font-sans font-medium">
-            A fully autonomous, self-healing Site Reliability Engineering agent. It monitors logs and metrics, runs cognitive root cause analysis, executes Docker runbooks, and verifies restoration.
+          
+          <p className="text-slate-500 text-sm sm:text-base mb-8 leading-relaxed max-w-xl font-medium font-sans">
+            SentinelOps AI is a localized, self-healing Site Reliability Engineering agent. By combining real-time Prometheus telemetry, docker container orchestration, and a LangGraph cognitive loop, it diagnoses logs and executes code-level remediations autonomously.
           </p>
-          <button
-            onClick={startDemo}
-            className="gradient-btn text-white px-8 py-3.5 rounded-full text-xs font-bold tracking-wider hover:opacity-90 active:scale-95 transition-all cursor-pointer"
-          >
-            Get Started
-          </button>
+          
+          <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-4 w-full sm:w-auto">
+            <Link
+              href="/dashboard"
+              className="flex items-center justify-center space-x-2 px-8 py-3.5 rounded-full text-xs font-bold tracking-wider bg-gradient-to-r from-blue-600 to-cyan-500 hover:opacity-95 text-white active:scale-95 transition-all shadow-lg shadow-blue-500/15 cursor-pointer"
+            >
+              <span>Launch Live Operations</span>
+              <ArrowRight className="h-4 w-4" />
+            </Link>
+            <a
+              href="#simulator"
+              className="flex items-center justify-center space-x-2 px-8 py-3.5 rounded-full text-xs font-bold tracking-wider border border-slate-200 hover:border-slate-300 bg-white text-slate-600 hover:text-slate-800 shadow-sm transition-all cursor-pointer"
+            >
+              <span>Watch Outage Simulator</span>
+            </a>
+          </div>
+
+          <div className="mt-12 grid grid-cols-3 gap-6 pt-8 border-t border-slate-100 w-full max-w-lg">
+            <div>
+              <div className="text-xl font-bold font-heading text-slate-800">18s</div>
+              <div className="text-[10px] text-slate-400 font-bold uppercase tracking-wider mt-1">Average MTTR</div>
+            </div>
+            <div>
+              <div className="text-xl font-bold font-heading text-slate-800">0</div>
+              <div className="text-[10px] text-slate-400 font-bold uppercase tracking-wider mt-1">Egress Data Cost</div>
+            </div>
+            <div>
+              <div className="text-xl font-bold font-heading text-slate-800">Local</div>
+              <div className="text-[10px] text-slate-400 font-bold uppercase tracking-wider mt-1">LLM Run (Qwen)</div>
+            </div>
+          </div>
         </div>
 
-        {/* Right Side: Generated Vector Illustration with floating tech elements */}
-        <div className="lg:col-span-7 w-full flex justify-center lg:justify-end relative">
-          <div className="relative rounded-2xl border border-slate-100 shadow-[0_20px_50px_rgba(0,0,0,0.06)] bg-white overflow-hidden p-2 transition-all hover:scale-[1.01] duration-300 w-full max-w-[580px]">
-            <img 
-              src="/sre_hero.png" 
-              alt="SentinelOps Autonomous SRE Illustration" 
-              className="w-full h-auto object-cover rounded-xl"
-            />
+        {/* Right Side UI Graphic */}
+        <div className="lg:col-span-6 w-full flex justify-center lg:justify-end relative">
+          <div className="relative rounded-2xl border border-slate-200 shadow-2xl bg-slate-950 p-2 overflow-hidden w-full max-w-[580px] group">
             
-            {/* Floating Organic Badges overlapping the image */}
-            <div className="absolute top-6 left-6 px-4 py-2.5 rounded-xl bg-white/95 border border-slate-100/80 shadow-md flex items-center space-x-2.5 backdrop-blur-md">
-              <Activity className="h-5 w-5 text-blue-600 animate-pulse" />
+            {/* Window Frame header */}
+            <div className="flex items-center justify-between px-4 py-2 border-b border-white/5 bg-slate-900/40">
+              <div className="flex space-x-1.5">
+                <span className="w-2.5 h-2.5 rounded-full bg-rose-500/80"></span>
+                <span className="w-2.5 h-2.5 rounded-full bg-amber-500/80"></span>
+                <span className="w-2.5 h-2.5 rounded-full bg-emerald-500/80"></span>
+              </div>
+              <span className="text-[10px] font-mono text-slate-500">sentinelops-agent-daemon.log</span>
+              <div className="w-10"></div>
+            </div>
+
+            <div className="p-4 bg-slate-950 font-mono text-xs text-slate-300 space-y-2 h-[340px] overflow-y-auto select-none scrollbar-thin">
+              <div className="text-slate-500">// Booting SentinelOps AI Agent Core ...</div>
+              <div className="flex items-center space-x-1">
+                <span className="text-emerald-500">✓</span>
+                <span>Ollama service connection confirmed: http://localhost:11434</span>
+              </div>
+              <div className="flex items-center space-x-1">
+                <span className="text-emerald-500">✓</span>
+                <span>Telemetry scraping active (Prometheus Client on port 9090)</span>
+              </div>
+              <div className="flex items-center space-x-1">
+                <span className="text-emerald-500">✓</span>
+                <span>Docker Daemon socket bound: /var/run/docker.sock</span>
+              </div>
+              <div className="text-slate-500 mt-2">// Telemetry Overview status nominal</div>
+              <div className="grid grid-cols-2 gap-2 text-[11px] p-2 bg-slate-900/30 rounded border border-white/5 my-2">
+                <div className="flex justify-between"><span>api-gateway:</span><span className="text-emerald-400 font-bold">HEALTHY</span></div>
+                <div className="flex justify-between"><span>order-service:</span><span className="text-emerald-400 font-bold">HEALTHY</span></div>
+                <div className="flex justify-between"><span>payment-service:</span><span className="text-emerald-400 font-bold">HEALTHY</span></div>
+                <div className="flex justify-between"><span>user-service:</span><span className="text-emerald-400 font-bold">HEALTHY</span></div>
+              </div>
+              <div className="text-cyan-400 animate-pulse mt-4">&gt; Agent listening on AlertManager webhook endpoint [/api/v1/webhook]...</div>
+              
+              <div className="absolute inset-x-0 bottom-0 h-24 bg-gradient-to-t from-slate-950 to-transparent pointer-events-none" />
+            </div>
+
+            {/* Overlapping Badge */}
+            <div className="absolute bottom-6 right-6 p-4 rounded-xl border border-slate-100 bg-white/90 shadow-xl flex items-center space-x-3 backdrop-blur-md hover:scale-105 transition-transform duration-200">
+              <div className="p-2 bg-blue-600/10 text-blue-600 border border-blue-600/20 rounded-lg">
+                <Cpu className="h-5 w-5 animate-spin-slow" />
+              </div>
               <div className="text-left">
-                <div className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">Self-Healing</div>
-                <div className="text-xs font-heading font-black text-slate-800">Agent Active</div>
+                <div className="text-[9px] text-slate-500 font-bold uppercase tracking-wider">Reasoning Loop</div>
+                <div className="text-xs font-bold text-slate-800">LangGraph Active</div>
               </div>
             </div>
-            
-            <div className="absolute bottom-6 right-6 px-4 py-2.5 rounded-xl bg-white/95 border border-slate-100/80 shadow-md flex items-center space-x-2.5 backdrop-blur-md">
-              <Cpu className="h-5 w-5 text-purple-600 animate-pulse" />
-              <div className="text-left">
-                <div className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">Cognitive Engine</div>
-                <div className="text-xs font-heading font-black text-slate-800">Qwen2.5 (3B)</div>
-              </div>
-            </div>
+
           </div>
         </div>
 
       </section>
 
-      {/* SRE Operations Center (Unified Dashboard Panels Together) */}
-      <section id="ops-center" className="px-8 py-12 max-w-[1400px] mx-auto w-full">
+      {/* Simulator Section */}
+      <section id="simulator" className="px-8 py-24 border-y border-slate-100 bg-slate-50/50 w-full relative">
+        <div className="absolute top-0 left-1/2 -translate-x-1/2 w-full max-w-[1200px] h-[1px] bg-gradient-to-r from-transparent via-blue-500/10 to-transparent"></div>
         
-        <div className="mb-8 text-center md:text-left">
-          <h2 className="text-xs uppercase tracking-widest font-black text-blue-600 mb-2">Operations Center</h2>
-          <h3 className="font-heading font-black text-slate-800 text-3xl">Autonomous SRE Command Console</h3>
-          <p className="text-slate-500 text-sm mt-2 max-w-xl">
-            A unified cockpit integrating telemetry meters, active incident feeds, and the live agent reasoning loop. Trigger faults on the left to activate self-healing.
+        <div className="max-w-[1400px] mx-auto text-center mb-16">
+          <div className="inline-flex items-center space-x-1.5 px-3 py-1 rounded-full border border-blue-200 bg-blue-50 text-xs font-mono font-bold text-blue-600 mb-3 uppercase tracking-wider">
+            <Radio className="h-3 w-3 text-blue-600 animate-pulse" />
+            <span>Interactive Simulator</span>
+          </div>
+          <h3 className="font-heading font-black text-slate-800 text-3xl sm:text-4xl uppercase">
+            Outage Remediation Playground
+          </h3>
+          <p className="text-slate-500 text-sm mt-3 max-w-lg mx-auto">
+            Choose a critical microservice outage scenario below to test and watch the SRE agent reasoning and automated resolution process.
           </p>
         </div>
 
-        {/* Unified 3-panel Dashboard Layout */}
-        <div className="bg-white border border-slate-100 shadow-[0_15px_50px_rgba(0,0,0,0.03)] rounded-2xl overflow-hidden flex flex-col lg:flex-row lg:h-[650px] w-full divide-y lg:divide-y-0 lg:divide-x divide-slate-100">
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 max-w-[1400px] mx-auto w-full items-stretch">
           
-          {/* Panel 1: Simulated Microservices (w-full lg:w-[35%]) */}
-          <div className="w-full lg:w-[35%] flex flex-col h-[500px] lg:h-full overflow-hidden bg-slate-50/10">
-            <div className="p-4 bg-slate-50 border-b border-slate-100 flex items-center justify-between">
-              <h4 className="text-xs font-bold uppercase tracking-wider text-slate-500 flex items-center space-x-1.5">
-                <Server className="h-4 w-4 text-blue-600" />
-                <span>Telemetry & Fault Injector</span>
-              </h4>
-              <div className={`flex items-center space-x-1.5 px-2.5 py-1 rounded-full border text-[9px] font-bold tracking-wide ${
-                clusterIsHealthy 
-                  ? "bg-emerald-50 border-emerald-100 text-emerald-600" 
-                  : "bg-red-50 border-red-100 text-red-600 animate-pulse"
-              }`}>
-                <span className={`h-1.5 w-1.5 rounded-full ${clusterIsHealthy ? "bg-emerald-500" : "bg-red-500"}`}></span>
-                <span>{clusterIsHealthy ? "HEALTHY" : "ANOMALY"}</span>
+          {/* Simulator Control Panel (Tabs & Steps) */}
+          <div className="lg:col-span-5 flex flex-col justify-between bg-white border border-slate-100 shadow-[0_8px_30px_rgba(0,0,0,0.02)] rounded-2xl p-6">
+            
+            {/* Scenarios Selector */}
+            <div className="space-y-3">
+              <h4 className="text-[11px] font-bold uppercase tracking-widest text-slate-500">1. Select Outage Scenario</h4>
+              <div className="grid grid-cols-1 sm:grid-cols-3 lg:grid-cols-1 gap-2.5">
+                {Object.entries(SCENARIOS).map(([key, item]) => {
+                  const isActive = activeScenario === key;
+                  return (
+                    <button
+                      key={key}
+                      onClick={() => changeScenario(key)}
+                      className={`p-3.5 rounded-xl border text-left transition-all flex items-center justify-between cursor-pointer ${
+                        isActive 
+                          ? "bg-blue-50 border-blue-600/30 text-blue-700 shadow-sm" 
+                          : "bg-slate-50/50 border-slate-100 hover:border-slate-200 text-slate-500 hover:text-slate-800"
+                      }`}
+                    >
+                      <div className="flex flex-col">
+                        <span className="font-bold text-xs">{item.name}</span>
+                        <span className="text-[9px] text-slate-500 font-mono mt-0.5">Target: {item.service}</span>
+                      </div>
+                      <ChevronRight className={`h-4 w-4 transition-transform duration-200 ${isActive ? "translate-x-0.5 text-blue-600" : "text-slate-400"}`} />
+                    </button>
+                  );
+                })}
               </div>
             </div>
 
-            <div className="flex-1 overflow-y-auto p-4 space-y-3.5">
-              {loadingServices ? (
-                <div className="h-full flex flex-col items-center justify-center space-y-2">
-                  <RefreshCw className="h-5 w-5 animate-spin text-blue-600" />
-                  <span className="text-[11px] text-slate-400">Querying cluster...</span>
-                </div>
-              ) : (
-                Object.values(services).map((service) => (
-                  <div 
-                    key={service.name}
-                    className="p-3.5 bg-white border border-slate-100 rounded-xl shadow-[0_3px_8px_rgba(0,0,0,0.01)] hover:shadow-md transition-all flex flex-col space-y-2.5"
-                  >
-                    <div className="flex items-center justify-between">
-                      <span className="font-bold text-xs text-slate-800">{service.name}</span>
-                      <span className={`px-1.5 py-0.5 text-[9px] font-bold tracking-wider rounded border ${getStatusColor(service.status)}`}>
-                        {service.status.toUpperCase()}
-                      </span>
-                    </div>
+            {/* Step-by-Step Flow */}
+            <div className="mt-8 space-y-4">
+              <div className="flex items-center justify-between">
+                <h4 className="text-[11px] font-bold uppercase tracking-widest text-slate-500">2. SRE Agent Lifecycle Trace</h4>
+                <button 
+                  onClick={() => setIsPlaying(!isPlaying)}
+                  className="text-[10px] font-bold text-blue-600 hover:text-blue-700 flex items-center space-x-1 cursor-pointer"
+                >
+                  <RefreshCw className={`h-3 w-3 ${isPlaying ? "animate-spin" : ""}`} />
+                  <span>{isPlaying ? "Pause Loop" : "Auto Play"}</span>
+                </button>
+              </div>
 
-                    <div className="space-y-1.5 text-[10px]">
-                      <div className="flex flex-col space-y-0.5">
-                        <div className="flex justify-between text-slate-400 text-[9px]">
-                          <span>CPU</span>
-                          <span className="font-mono font-bold text-slate-600">{(service.cpu * 100).toFixed(0)}%</span>
-                        </div>
-                        <div className="w-full bg-slate-100 h-1.5 rounded-full overflow-hidden">
-                          <div 
-                            className={`h-full rounded-full transition-all duration-300 ${service.cpu > 0.8 ? "bg-red-500" : service.cpu > 0.4 ? "bg-amber-500" : "bg-blue-600"}`}
-                            style={{ width: `${Math.min(service.cpu * 100, 100)}%` }}
-                          ></div>
-                        </div>
-                      </div>
+              <div className="relative border-l border-slate-100 pl-4 ml-2 space-y-4">
+                {scenario.steps.map((step, idx) => {
+                  const isActive = activeStep === idx;
+                  const isCompleted = activeStep > idx;
+                  const StepIcon = step.icon;
 
-                      <div className="flex flex-col space-y-0.5">
-                        <div className="flex justify-between text-slate-400 text-[9px]">
-                          <span>MEMORY</span>
-                          <span className="font-mono font-bold text-slate-600">{service.memory.toFixed(0)} MB</span>
-                        </div>
-                        <div className="w-full bg-slate-100 h-1.5 rounded-full overflow-hidden">
-                          <div 
-                            className={`h-full rounded-full transition-all duration-300 ${service.memory > 80 ? "bg-red-500 animate-pulse" : service.memory > 45 ? "bg-amber-500" : "bg-blue-600"}`}
-                            style={{ width: `${Math.min((service.memory / 120) * 100, 100)}%` }}
-                          ></div>
-                        </div>
-                      </div>
-                    </div>
-
-                    {["payment-service", "order-service", "api-gateway"].includes(service.name) && (
-                      <div className="pt-2 border-t border-slate-100 flex items-center justify-between gap-1 flex-wrap">
-                        {service.name === "payment-service" && (
-                          <button
-                            onClick={() => injectFault(service.name, "memory-leak")}
-                            disabled={injectingFault !== null || service.status === "offline"}
-                            className="px-2.5 py-0.5 text-[9px] font-bold text-red-500 hover:text-white border border-red-500/25 hover:bg-red-500 active:bg-red-600 rounded-full transition-all duration-150 disabled:opacity-40"
-                          >
-                            {injectingFault === `${service.name}-memory-leak` ? "Leaking..." : "Leak Mem"}
-                          </button>
-                        )}
-                        {service.name === "order-service" && (
-                          <button
-                            onClick={() => injectFault(service.name, "cpu-spike")}
-                            disabled={injectingFault !== null || service.status === "offline"}
-                            className="px-2.5 py-0.5 text-[9px] font-bold text-amber-600 hover:text-white border border-amber-500/25 hover:bg-amber-500 active:bg-amber-600 rounded-full transition-all duration-150 disabled:opacity-40"
-                          >
-                            {injectingFault === `${service.name}-cpu-spike` ? "Spiking..." : "Spike CPU"}
-                          </button>
-                        )}
-                        <button
-                          onClick={() => injectFault(service.name, "error-spike")}
-                          disabled={injectingFault !== null || service.status === "offline"}
-                          className="px-2.5 py-0.5 text-[9px] font-bold text-rose-500 hover:text-white border border-rose-500/25 hover:bg-rose-500 active:bg-[#f43f5e] rounded-full transition-all duration-150 disabled:opacity-40"
-                        >
-                          {injectingFault === `${service.name}-error-spike` ? "Injecting..." : "Fail HTTP"}
-                        </button>
-                      </div>
-                    )}
-                  </div>
-                ))
-              )}
-            </div>
-          </div>
-
-          {/* Panel 2: Incident Feed (w-full lg:w-[25%]) */}
-          <div className="w-full lg:w-[25%] flex flex-col h-[400px] lg:h-full overflow-hidden bg-white">
-            <div className="p-4 border-b border-slate-100 flex items-center justify-between">
-              <h4 className="text-xs font-bold uppercase tracking-wider text-slate-500 flex items-center space-x-1.5">
-                <AlertTriangle className="h-4 w-4 text-amber-500" />
-                <span>Incident Feed</span>
-              </h4>
-              <button 
-                onClick={() => setFilterActive(!filterActive)}
-                className={`text-[9px] px-2.5 py-1 rounded-full border-2 font-bold tracking-wider uppercase transition-colors cursor-pointer ${
-                  filterActive 
-                    ? "bg-blue-600 border-blue-600 text-white" 
-                    : "bg-transparent border-slate-200 text-slate-500 hover:text-slate-700"
-                }`}
-              >
-                {filterActive ? "Resolved" : "Active Only"}
-              </button>
-            </div>
-
-            <div className="flex-1 overflow-y-auto p-4 space-y-3.5">
-              {filteredIncidents.length === 0 ? (
-                <div className="h-40 flex flex-col items-center justify-center text-slate-400 text-center space-y-2 border border-dashed border-slate-200 rounded-xl">
-                  <CheckCircle className="h-7 w-7 text-emerald-500 animate-pulse" />
-                  <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">System Stable</span>
-                </div>
-              ) : (
-                filteredIncidents.map((incident) => {
-                  const isSelected = incident.id === selectedIncidentId;
                   return (
-                    <div
-                      key={incident.id}
-                      onClick={() => setSelectedIncidentId(incident.id)}
-                      className={`p-4 rounded-xl border text-left cursor-pointer transition-all flex flex-col space-y-2.5 relative overflow-hidden ${
-                        isSelected 
-                          ? "bg-blue-50/20 border-blue-600/30 shadow-[0_4px_12px_rgba(9,66,230,0.03)]" 
-                          : "bg-slate-50/30 border-slate-100 hover:border-slate-200"
+                    <div 
+                      key={idx}
+                      onClick={() => handleStepClick(idx)}
+                      className={`relative flex items-start space-x-3 cursor-pointer group transition-all duration-200 ${
+                        isActive 
+                          ? "opacity-100 translate-x-1" 
+                          : isCompleted 
+                            ? "opacity-60 hover:opacity-85" 
+                            : "opacity-40 hover:opacity-60"
                       }`}
                     >
-                      <div className="flex items-center justify-between">
-                        <span className="font-mono text-[10px] font-bold text-slate-500">{incident.id}</span>
-                        {getIncidentStatusBadge(incident.status)}
-                      </div>
+                      {/* Left Dot/Icon overlap */}
+                      <span className={`absolute -left-[27px] w-6 h-6 rounded-full flex items-center justify-center border text-xs shadow-md transition-all ${
+                        isActive 
+                          ? "bg-blue-600 border-blue-500 text-white pulse-glow" 
+                          : isCompleted 
+                            ? "bg-emerald-50 border-emerald-200 text-emerald-600" 
+                            : "bg-slate-50 border-slate-200 text-slate-400"
+                      }`}>
+                        {isCompleted ? <CheckCircle className="h-3 w-3" /> : idx + 1}
+                      </span>
 
-                      <div>
-                        <h4 className="font-bold text-xs text-slate-800">
-                          {incident.alert_name}
-                        </h4>
-                        <div className="text-slate-400 text-[9px] mt-0.5 flex items-center space-x-1">
-                          <span>Target:</span>
-                          <span className="font-mono text-slate-700 font-semibold">{incident.service}</span>
+                      <div className="text-left flex-grow">
+                        <div className="flex items-center justify-between">
+                          <span className={`font-bold text-xs transition-colors ${isActive ? "text-blue-600" : "text-slate-700"}`}>
+                            {step.title}
+                          </span>
+                          <span className={`text-[8px] font-mono font-bold px-1.5 py-0.5 rounded border uppercase tracking-wider ${step.color}`}>
+                            {step.badge}
+                          </span>
                         </div>
-                      </div>
-
-                      <div className="flex items-center justify-between pt-2 border-t border-slate-100 text-[9px] text-slate-400">
-                        <span className="flex items-center space-x-1">
-                          <Clock className="h-3.5 w-3.5" />
-                          <span>{formatTime(incident.created_at)}</span>
-                        </span>
-                        {incident.resolution_time_seconds && (
-                          <span className="font-mono font-bold text-slate-600">MTTR: {incident.resolution_time_seconds.toFixed(0)}s</span>
-                        )}
+                        <p className="text-[10px] text-slate-500 mt-0.5 font-medium leading-relaxed font-sans">
+                          {idx === 0 && `Fetch logs & detect root-cause`}
+                          {idx === 1 && `Apply selected remediation script`}
+                          {idx === 2 && `Wait and verify health stats return`}
+                          {idx === 3 && `Compile markdown post-mortem logs`}
+                        </p>
                       </div>
                     </div>
                   );
-                })
-              )}
+                })}
+              </div>
+            </div>
+
+            {/* Launch Console CTA Button */}
+            <div className="mt-8 pt-6 border-t border-slate-100">
+              <Link
+                href="/dashboard"
+                className="flex items-center justify-center space-x-1.5 w-full py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold tracking-wider transition-all duration-200"
+              >
+                <span>Trigger This in Real Console</span>
+                <ArrowRight className="h-4.5 w-4.5" />
+              </Link>
+            </div>
+
+          </div>
+
+          {/* Simulator Visual Terminal / Log Output */}
+          <div className="lg:col-span-7 flex flex-col rounded-2xl border border-slate-100 overflow-hidden bg-white shadow-[0_8px_30px_rgba(0,0,0,0.02)]">
+            <div className="px-4 py-3 bg-slate-50 border-b border-slate-100 flex items-center justify-between text-xs font-mono select-none text-slate-600">
+              <div className="flex items-center space-x-2">
+                <Terminal className="h-4.5 w-4.5 text-blue-600" />
+                <span className="font-bold text-slate-700">SentinelOps Console Stream</span>
+              </div>
+              <div className="flex items-center space-x-2 text-[10px] text-slate-400">
+                <span className="w-2 h-2 rounded-full bg-emerald-500 animate-ping"></span>
+                <span>Telemetry Connected</span>
+              </div>
+            </div>
+
+            <div className="flex-1 p-5 font-mono text-[11px] leading-relaxed space-y-3 text-left overflow-y-auto max-h-[450px] lg:max-h-none scrollbar-thin bg-[#0c1020] text-slate-300 shadow-inner">
+              {typedLogs.map((log, idx) => {
+                let textClass = "text-slate-300";
+                if (log.includes("ALERT")) textClass = "text-red-400 font-bold animate-pulse";
+                else if (log.includes("INVESTIGATE")) textClass = "text-purple-300";
+                else if (log.includes("REMEDIATE")) textClass = "text-amber-300 font-bold";
+                else if (log.includes("VERIFY")) textClass = "text-cyan-300";
+                else if (log.includes("REPORT")) textClass = "text-emerald-400";
+                else if (log.includes("LLM Diagnosis")) textClass = "text-blue-300 font-semibold italic";
+                else if (log.includes("Docker command")) textClass = "text-slate-400 text-[10px] bg-slate-950 p-1 rounded font-mono border border-white/5 block my-1";
+
+                return (
+                  <div key={idx} className={`${textClass} whitespace-pre-wrap`}>
+                    {log}
+                  </div>
+                );
+              })}
+              <div className="text-blue-500 animate-pulse mt-3">&gt;_ Listening for telemetry updates...</div>
+            </div>
+            
+            {/* Terminal status bar */}
+            <div className="px-4 py-2 border-t border-slate-100 bg-slate-50 text-[9px] font-mono text-slate-500 flex justify-between select-none">
+              <div>Incident: INC-489{activeScenario === 'memory' ? '0' : activeScenario === 'cpu' ? '1' : '2'}</div>
+              <div>MTTR Target: &lt;20s</div>
+            </div>
+
+          </div>
+
+        </div>
+      </section>
+
+      {/* SRE Core Loop / State Machine Visualizer */}
+      <section className="px-8 py-24 max-w-[1400px] mx-auto w-full text-center">
+        
+        <div className="mb-16">
+          <div className="inline-flex items-center space-x-1 px-3 py-1 rounded-full border border-blue-200 bg-blue-50 text-xs font-mono font-bold text-blue-600 mb-3 uppercase tracking-wider">
+            <Layers className="h-3.5 w-3.5" />
+            <span>Agent Architecture</span>
+          </div>
+          <h3 className="font-heading font-black text-slate-800 text-3xl sm:text-4xl uppercase">
+            LangGraph Cognitive State Loop
+          </h3>
+          <p className="text-slate-500 text-sm mt-3 max-w-lg mx-auto">
+            SentinelOps routes decisions via an agentic state machine rather than hardcoded scripts, ensuring flexible diagnosis and recovery paths.
+          </p>
+        </div>
+
+        {/* State Machine Grid Flow */}
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-6 relative px-4">
+          
+          {/* Card 1: Investigate */}
+          <div className="bg-white border border-slate-100 hover:border-blue-300 p-6 rounded-2xl text-left transition-all duration-300 flex flex-col justify-between group shadow-[0_4px_20px_rgba(0,0,0,0.01)] hover:shadow-md">
+            <div>
+              <div className="w-10 h-10 rounded-xl bg-blue-50 border border-blue-200 flex items-center justify-center text-blue-600 mb-4 group-hover:scale-110 transition-transform">
+                <Target className="h-5 w-5" />
+              </div>
+              <h4 className="font-heading font-bold text-slate-800 text-lg mb-2">1. Investigate Node</h4>
+              <p className="text-slate-500 text-xs leading-relaxed font-sans font-medium">
+                Pulls the last 50 lines of container stdout, scrapes Prometheus metrics, and reads internal FastAPI /health outputs to construct LLM diagnosis prompts.
+              </p>
+            </div>
+            <div className="text-[10px] font-mono text-slate-400 mt-6 border-t border-slate-100 pt-4">
+              Tools: get_container_logs(), get_service_metrics()
             </div>
           </div>
 
-          {/* Panel 3: SRE Agent Console Terminal (w-full lg:w-[40%]) */}
-          <div className="w-full lg:w-[40%] flex flex-col h-[500px] lg:h-full overflow-hidden bg-slate-50/10">
-            <div className="p-4 bg-slate-50 border-b border-slate-100 flex items-center justify-between">
-              <h4 className="text-xs font-bold uppercase tracking-wider text-slate-500 flex items-center space-x-1.5">
-                <Terminal className="h-4 w-4 text-slate-600" />
-                <span>SRE Agent Log & Reports</span>
-              </h4>
+          {/* Card 2: Remediate */}
+          <div className="bg-white border border-slate-100 hover:border-amber-300 p-6 rounded-2xl text-left transition-all duration-300 flex flex-col justify-between group shadow-[0_4px_20px_rgba(0,0,0,0.01)] hover:shadow-md">
+            <div>
+              <div className="w-10 h-10 rounded-xl bg-amber-50 border border-amber-200 flex items-center justify-center text-amber-600 mb-4 group-hover:scale-110 transition-transform">
+                <Zap className="h-5 w-5" />
+              </div>
+              <h4 className="font-heading font-bold text-slate-800 text-lg mb-2">2. Remediate Node</h4>
+              <p className="text-slate-500 text-xs leading-relaxed font-sans font-medium">
+                Executes the diagnostic mitigation plan. Commands are run safely via mounted Docker sockets or local Python virtual environment subprocesses.
+              </p>
             </div>
+            <div className="text-[10px] font-mono text-slate-400 mt-6 border-t border-slate-100 pt-4">
+              Tools: restart_service(), scale_replicas(), rollback_config()
+            </div>
+          </div>
 
-            {selectedIncident ? (
-              <div className="flex-1 flex flex-col p-4 overflow-hidden space-y-3">
-                {/* Meta details dashboard inside Panel 3 */}
-                <div className="p-3 bg-white border border-slate-100 rounded-xl text-[10px] space-y-2.5 flex flex-col shadow-[0_4px_12px_rgba(0,0,0,0.01)] shrink-0">
-                  <div className="grid grid-cols-2 gap-1.5 text-slate-500 font-medium">
-                    <div>ID: <span className="font-mono font-bold text-slate-800">{selectedIncident.id}</span></div>
-                    <div>Status: <span className="font-bold text-slate-800">{selectedIncident.status}</span></div>
-                    <div>Target: <span className="font-mono font-bold text-slate-800">{selectedIncident.service}</span></div>
-                    {selectedIncident.resolution_time_seconds && (
-                      <div>MTTR: <span className="font-bold text-slate-800">{selectedIncident.resolution_time_seconds}s</span></div>
-                    )}
-                  </div>
-
-                  {/* Confidence & Risk */}
-                  {(selectedIncident.confidence !== undefined && selectedIncident.confidence !== null) && (
-                    <div className="pt-2 border-t border-slate-100 flex items-center gap-3 justify-between">
-                      <div className="flex items-center gap-1.5 flex-grow max-w-[70%]">
-                        <Target className="h-3.5 w-3.5 text-blue-600 shrink-0" />
-                        <span className="text-slate-400 text-[9px] uppercase tracking-wider font-semibold shrink-0">Confidence</span>
-                        <div className="flex-grow bg-slate-100 h-1.5 rounded-full overflow-hidden">
-                          <div
-                            className={`h-full rounded-full transition-all duration-500 ${
-                              selectedIncident.confidence >= 80 ? "bg-emerald-500" :
-                              selectedIncident.confidence >= 50 ? "bg-amber-500" : "bg-red-500"
-                            }`}
-                            style={{ width: `${Math.min(selectedIncident.confidence, 100)}%` }}
-                          ></div>
-                        </div>
-                        <span className="font-mono text-slate-800 font-bold text-[9px] shrink-0">{selectedIncident.confidence}%</span>
-                      </div>
-
-                      {selectedIncident.risk_level && (() => {
-                        const rc = getRiskColor(selectedIncident.risk_level);
-                        return (
-                          <div className={`flex items-center gap-0.5 px-2 py-0.5 rounded border ${rc.border} ${rc.bg} shrink-0`}>
-                            <Shield className={`h-3 w-3 ${rc.text}`} />
-                            <span className={`font-bold text-[8px] uppercase tracking-wider ${rc.text}`}>{selectedIncident.risk_level}</span>
-                          </div>
-                        );
-                      })()}
-                    </div>
-                  )}
-
-                  {/* Evidence & Blast Radius */}
-                  {(() => {
-                    const evidenceItems = parseJsonField(selectedIncident.evidence);
-                    const affectedItems = parseJsonField(selectedIncident.affected_services);
-                    return (evidenceItems.length > 0 || affectedItems.length > 0) ? (
-                      <div className="pt-2 border-t border-slate-100 flex flex-col space-y-1.5">
-                        {evidenceItems.length > 0 && (
-                          <div>
-                            <div className="text-[8px] font-bold uppercase tracking-wider text-slate-400 mb-0.5 flex items-center gap-1">
-                              <Zap className="h-3 w-3 text-amber-500" />
-                              Evidence
-                            </div>
-                            <ul className="space-y-0.5 pl-0.5">
-                              {evidenceItems.map((e, i) => (
-                                <li key={i} className="text-[9px] text-slate-600 pl-3 relative before:content-['▸'] before:absolute before:left-0 before:text-blue-500">{e}</li>
-                              ))}
-                            </ul>
-                          </div>
-                        )}
-                        {affectedItems.length > 0 && (
-                          <div>
-                            <div className="text-[8px] font-bold uppercase tracking-wider text-slate-400 mb-0.5">
-                              Blast Radius
-                            </div>
-                            <div className="flex flex-wrap gap-1">
-                              {affectedItems.map((svc, i) => (
-                                <span key={i} className="px-1.5 py-0.5 text-[8px] font-mono rounded border border-slate-100 bg-slate-50 text-slate-600 shadow-sm">{svc}</span>
-                              ))}
-                            </div>
-                          </div>
-                        )}
-                      </div>
-                    ) : null;
-                  })()}
-
-                  {selectedIncident.root_cause && (
-                    <div className="pt-2 border-t border-slate-100 text-[10px] text-slate-600">
-                      <strong className="text-slate-400 uppercase tracking-wider text-[8px] block mb-0.5">Root Cause</strong>
-                      {selectedIncident.root_cause}
-                    </div>
-                  )}
-                </div>
-
-                {/* Console Output */}
-                <div ref={consoleRef} className="flex-grow bg-[#0c1020] rounded-xl p-4 font-mono text-[11px] overflow-y-auto flex flex-col space-y-2 relative shadow-inner">
-                  {logs.length === 0 ? (
-                    <div className="h-full flex items-center justify-center text-slate-500 text-center italic">
-                      Idle... select an incident to stream agent timeline.
-                    </div>
-                  ) : (
-                    logs.map((log) => (
-                      <div key={log.id} className="leading-relaxed whitespace-pre-wrap">
-                        <span className="text-slate-500 mr-2 text-[9px]">{formatTime(log.timestamp)}</span>
-                        <span className={getLogStyle(log.level)}>{log.message}</span>
-                      </div>
-                    ))
-                  )}
-                </div>
-
-                {/* Markdown post-mortem downloader */}
-                {selectedIncident.resolution_action && (
-                  <div className="pt-2 border-t border-slate-200/60 flex justify-between items-center shrink-0">
-                    <span className="text-[10px] text-emerald-600 font-bold flex items-center space-x-1">
-                      <CheckCircle className="h-3.5 w-3.5" />
-                      <span>Report Compiled</span>
-                    </span>
-                    <button
-                      onClick={() => {
-                        const element = document.createElement("a");
-                        const file = new Blob([selectedIncident.resolution_action || ""], {type: 'text/markdown'});
-                        element.href = URL.createObjectURL(file);
-                        element.download = `PostMortem-${selectedIncident.id}.md`;
-                        document.body.appendChild(element);
-                        element.click();
-                        document.body.removeChild(element);
-                      }}
-                      className="flex items-center space-x-1 px-3 py-1.5 text-[10px] font-bold rounded-full bg-blue-600 hover:bg-blue-700 text-white shadow-md shadow-blue-500/10 active:scale-95 transition-all cursor-pointer"
-                    >
-                      <Download className="h-3 w-3" />
-                      <span>Download Report</span>
-                    </button>
-                  </div>
-                )}
+          {/* Card 3: Verify */}
+          <div className="bg-white border border-slate-100 hover:border-cyan-300 p-6 rounded-2xl text-left transition-all duration-300 flex flex-col justify-between group shadow-[0_4px_20px_rgba(0,0,0,0.01)] hover:shadow-md">
+            <div>
+              <div className="w-10 h-10 rounded-xl bg-cyan-50 border border-cyan-200 flex items-center justify-center text-cyan-600 mb-4 group-hover:scale-110 transition-transform">
+                <Shield className="h-5 w-5" />
               </div>
-            ) : (
-              <div className="flex-grow flex flex-col items-center justify-center text-center text-slate-400 space-y-3 p-10">
-                <Terminal className="h-9 w-9 text-slate-300 animate-pulse" />
-                <div>
-                  <h3 className="font-bold text-xs text-slate-500">Terminal Offline</h3>
-                  <p className="text-[10px] max-w-[200px] mt-1 text-slate-400">Select an incident from the feed to connect into SRE logs.</p>
-                </div>
+              <h4 className="font-heading font-bold text-slate-800 text-lg mb-2">3. Verify Node</h4>
+              <p className="text-slate-500 text-xs leading-relaxed font-sans font-medium">
+                Monitors downstream metrics over a convergence window to check if service recovery holds and verify the incident has been successfully resolved.
+              </p>
+            </div>
+            <div className="text-[10px] font-mono text-slate-400 mt-6 border-t border-slate-100 pt-4">
+              Tools: verify_telemetry_health(), run_synthetic_tests()
+            </div>
+          </div>
+
+          {/* Card 4: Report */}
+          <div className="bg-white border border-slate-100 hover:border-emerald-300 p-6 rounded-2xl text-left transition-all duration-300 flex flex-col justify-between group shadow-[0_4px_20px_rgba(0,0,0,0.01)] hover:shadow-md">
+            <div>
+              <div className="w-10 h-10 rounded-xl bg-emerald-50 border border-emerald-200 flex items-center justify-center text-emerald-600 mb-4 group-hover:scale-110 transition-transform">
+                <CheckCircle className="h-5 w-5" />
               </div>
-            )}
+              <h4 className="font-heading font-bold text-slate-800 text-lg mb-2">4. Report Node</h4>
+              <p className="text-slate-500 text-xs leading-relaxed font-sans font-medium">
+                Compiles a detailed post-mortem report summarizing the root cause, actions taken, timeline, and suggestions to prevent recurrence.
+              </p>
+            </div>
+            <div className="text-[10px] font-mono text-slate-400 mt-6 border-t border-slate-100 pt-4">
+              Tools: write_post_mortem_db(), emit_slack_webhook()
+            </div>
           </div>
 
         </div>
 
       </section>
 
-      {/* SRE Capabilities Section (Matching "Our Top Benefits") */}
-      <section id="capabilities" className="bg-white/50 border-y border-slate-100/80 px-8 py-16 w-full">
-        <div className="max-w-[1400px] mx-auto text-center mb-16">
-          <h2 className="text-xs uppercase tracking-widest font-black text-blue-600 mb-2">Our SRE Capabilities</h2>
-          <h3 className="font-heading font-black text-slate-800 text-3xl">Auto-Healing Operations Engine</h3>
-          <p className="text-slate-500 text-sm mt-3 max-w-lg mx-auto">SentinelOps monitors, resolves, and documents incidents dynamically without developer interventions.</p>
-        </div>
-
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-12 max-w-[1400px] mx-auto w-full px-4">
+      {/* Infrastructure Components Stack / Architecture Grid */}
+      <section className="px-8 py-24 bg-slate-50/50 border-t border-slate-100 w-full">
+        <div className="max-w-[1400px] mx-auto grid grid-cols-1 lg:grid-cols-12 gap-12 items-center">
           
-          {/* Card 1: Automatic Remediation */}
-          <div className="relative bg-white border border-slate-100 shadow-[0_8px_30px_rgba(0,0,0,0.03)] rounded-2xl pl-10 pr-6 py-7 flex items-start text-left">
-            {/* Circular badge overlapping left edge */}
-            <div className="absolute -left-7 top-1/2 transform -translate-y-1/2 w-14 h-14 rounded-full flex items-center justify-center bg-[#00decb] text-white shadow-lg pulse-glow">
-              <Shield className="h-6 w-6" />
+          <div className="lg:col-span-4 text-left">
+            <div className="inline-flex items-center space-x-1.5 px-3 py-1 rounded-full border border-blue-200 bg-blue-50 text-xs font-mono font-bold text-blue-600 mb-3 uppercase tracking-wider">
+              <Cpu className="h-3.5 w-3.5" />
+              <span>System Stack</span>
             </div>
-            <div>
-              <h4 className="font-heading font-bold text-slate-800 text-lg mb-2">Automatic Remediation</h4>
-              <p className="text-slate-500 text-xs leading-relaxed font-sans font-medium">
-                SentinelOps evaluates firing alerts and automatically runs targeted SRE runbooks like service restarts, configuration rollbacks, and capacity scaling.
-              </p>
+            <h3 className="font-heading font-black text-slate-800 text-3xl uppercase leading-[1.15]">
+              Modern Observability & Agent Integration
+            </h3>
+            <p className="text-slate-500 text-xs leading-relaxed mt-4 font-sans font-medium">
+              SentinelOps is architected around robust production paradigms. In a production containerized environment, the FastAPI agent uses the docker daemon interface directly, backed by Prometheus alerting rules.
+            </p>
+            
+            <div className="mt-8 space-y-3">
+              <div className="flex items-center space-x-2.5 text-xs text-slate-600">
+                <span className="w-1.5 h-1.5 rounded-full bg-blue-500"></span>
+                <span>Ollama / Local LLM Inference Isolation</span>
+              </div>
+              <div className="flex items-center space-x-2.5 text-xs text-slate-600">
+                <span className="w-1.5 h-1.5 rounded-full bg-blue-500"></span>
+                <span>Docker Socket Container Control Mounting</span>
+              </div>
+              <div className="flex items-center space-x-2.5 text-xs text-slate-600">
+                <span className="w-1.5 h-1.5 rounded-full bg-blue-500"></span>
+                <span>SQL Database Incident Log Persistence</span>
+              </div>
             </div>
           </div>
 
-          {/* Card 2: Cognitive RCA */}
-          <div className="relative bg-white border border-slate-100 shadow-[0_8px_30px_rgba(0,0,0,0.03)] rounded-2xl pl-10 pr-6 py-7 flex items-start text-left">
-            {/* Circular badge overlapping left edge */}
-            <div className="absolute -left-7 top-1/2 transform -translate-y-1/2 w-14 h-14 rounded-full flex items-center justify-center bg-[#8b5cf6] text-white shadow-lg pulse-glow">
-              <Cpu className="h-6 w-6" />
+          <div className="lg:col-span-8 grid grid-cols-1 sm:grid-cols-2 gap-4">
+            
+            {/* Observability */}
+            <div className="bg-white border border-slate-100 shadow-[0_4px_20px_rgba(0,0,0,0.01)] hover:shadow-md transition-shadow p-5 rounded-2xl text-left flex space-x-4">
+              <div className="p-3 bg-red-50 border border-red-100 text-red-600 rounded-xl h-11 w-11 flex items-center justify-center shrink-0">
+                <Radio className="h-5.5 w-5.5" />
+              </div>
+              <div>
+                <h4 className="font-bold text-slate-800 text-sm">Telemetry Stack</h4>
+                <p className="text-slate-500 text-[11px] leading-relaxed mt-1">
+                  Prometheus metrics gathering. Scrapes CPU, Memory, and Error thresholds from running microservices. Uses AlertManager webhooks for triggers.
+                </p>
+              </div>
             </div>
-            <div>
-              <h4 className="font-heading font-bold text-slate-800 text-lg mb-2">Make Better Decision</h4>
-              <p className="text-slate-500 text-xs leading-relaxed font-sans font-medium">
-                Uses local LLM reasoning loops to investigate container stdout logs, health checks, and Prometheus metrics to pinpoint root causes.
-              </p>
+
+            {/* FastAPI */}
+            <div className="bg-white border border-slate-100 shadow-[0_4px_20px_rgba(0,0,0,0.01)] hover:shadow-md transition-shadow p-5 rounded-2xl text-left flex space-x-4">
+              <div className="p-3 bg-blue-50 border border-blue-100 text-blue-600 rounded-xl h-11 w-11 flex items-center justify-center shrink-0">
+                <Server className="h-5.5 w-5.5" />
+              </div>
+              <div>
+                <h4 className="font-bold text-slate-800 text-sm">FastAPI SRE Gateway</h4>
+                <p className="text-slate-500 text-[11px] leading-relaxed mt-1">
+                  Exposes rest webhooks, coordinates docker environment instructions, hosts logs proxy endpoints, and runs SQLite database writes.
+                </p>
+              </div>
             </div>
+
+            {/* Ollama */}
+            <div className="bg-white border border-slate-100 shadow-[0_4px_20px_rgba(0,0,0,0.01)] hover:shadow-md transition-shadow p-5 rounded-2xl text-left flex space-x-4">
+              <div className="p-3 bg-purple-50 border border-purple-100 text-purple-600 rounded-xl h-11 w-11 flex items-center justify-center shrink-0">
+                <Cpu className="h-5.5 w-5.5" />
+              </div>
+              <div>
+                <h4 className="font-bold text-slate-800 text-sm">Local Reasoning Engine</h4>
+                <p className="text-slate-500 text-[11px] leading-relaxed mt-1">
+                  Processes telemetry variables using lightweight local LLMs (e.g. Qwen 2.5:3b or Llama 3) via Ollama. Ensures 100% data privacy and zero API key bills.
+                </p>
+              </div>
+            </div>
+
+            {/* Next.js UI */}
+            <div className="bg-white border border-slate-100 shadow-[0_4px_20px_rgba(0,0,0,0.01)] hover:shadow-md transition-shadow p-5 rounded-2xl text-left flex space-x-4">
+              <div className="p-3 bg-cyan-50 border border-cyan-200 text-cyan-600 rounded-xl h-11 w-11 flex items-center justify-center shrink-0">
+                <Layout className="h-5.5 w-5.5" />
+              </div>
+              <div>
+                <h4 className="font-bold text-slate-800 text-sm">Operational Control Center</h4>
+                <p className="text-slate-500 text-[11px] leading-relaxed mt-1">
+                  A real-time reactive interface to monitor service status, trigger test outages, view the live agent reasoning loop, and download post-mortem logs.
+                </p>
+              </div>
+            </div>
+
           </div>
 
-          {/* Card 3: Spectacular Dashboard */}
-          <div className="relative bg-white border border-slate-100 shadow-[0_8px_30px_rgba(0,0,0,0.03)] rounded-2xl pl-10 pr-6 py-7 flex items-start text-left">
-            {/* Circular badge overlapping left edge */}
-            <div className="absolute -left-7 top-1/2 transform -translate-y-1/2 w-14 h-14 rounded-full flex items-center justify-center bg-[#0942e6] text-white shadow-lg pulse-glow">
-              <Activity className="h-6 w-6" />
-            </div>
-            <div>
-              <h4 className="font-heading font-bold text-slate-800 text-lg mb-2">Spectacular Dashboard</h4>
-              <p className="text-slate-500 text-xs leading-relaxed font-sans font-medium">
-                Renders microservice status widgets, streams live agent diagnostics logs, resolves metrics warnings, and auto-compiles detailed Markdown post-mortems.
-              </p>
-            </div>
+        </div>
+      </section>
+
+      {/* Tech Stack Callout Banner */}
+      <section className="px-8 py-16 bg-gradient-to-b from-transparent to-slate-50 w-full relative">
+        <div className="max-w-[1000px] mx-auto bg-gradient-to-r from-blue-50 via-purple-50 to-blue-50 border border-blue-100 p-12 rounded-3xl text-center relative overflow-hidden shadow-sm">
+          
+          <div className="absolute top-0 right-0 w-[200px] h-[200px] bg-blue-100/20 blur-3xl pointer-events-none rounded-full" />
+          
+          <h3 className="font-heading font-black text-2xl sm:text-3xl text-slate-800 uppercase mb-4">
+            Ready to test autonomous infrastructure?
+          </h3>
+          <p className="text-slate-500 text-xs sm:text-sm max-w-xl mx-auto mb-8 font-sans font-medium">
+            Deploy the services container cluster locally using the startup runscripts, trigger failure scenarios, and watch self-healing SRE in action.
+          </p>
+
+          <div className="flex flex-col sm:flex-row items-center justify-center gap-4">
+            <Link
+              href="/dashboard"
+              className="px-8 py-3.5 bg-blue-600 hover:bg-blue-700 text-white rounded-full text-xs font-bold tracking-wider hover:-translate-y-0.5 transition-all shadow-lg shadow-blue-500/20"
+            >
+              Open Command Console
+            </Link>
+            <a
+              href="http://localhost:8000/docs"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="px-8 py-3.5 border border-slate-200 hover:bg-slate-50 text-slate-600 hover:text-slate-800 rounded-full text-xs font-bold tracking-wider transition-all shadow-sm bg-white"
+            >
+              View API Documentation
+            </a>
           </div>
 
         </div>
       </section>
 
       {/* Footer */}
-      <footer className="bg-white border-t border-slate-100 px-8 py-6 text-center text-xs text-slate-400 mt-auto font-sans">
+      <footer className="bg-white border-t border-slate-100 px-8 py-8 text-center text-xs text-slate-500 mt-auto font-sans">
         <div className="flex flex-col sm:flex-row items-center justify-between max-w-[1400px] mx-auto w-full gap-4">
-          <div>SentinelOps Agent SRE Framework | Local LLM Development</div>
-          <div className="flex items-center gap-2">
-            <span>Version 1.0.0</span>
+          <div className="flex items-center space-x-2">
+            <Activity className="h-4.5 w-4.5 text-blue-500" />
+            <span className="font-bold text-slate-700">SentinelOps AI Agent</span>
             <span className="text-slate-300">|</span>
-            <span>Ollama: qwen2.5:3b</span>
+            <span>Open Source Hackathon Project</span>
+          </div>
+          <div className="flex items-center gap-4 text-slate-500">
+            <span>Next.js 16</span>
+            <span>FastAPI</span>
+            <span>LangGraph</span>
+            <span>Ollama</span>
           </div>
         </div>
       </footer>
-
-      {/* Floating Rocket scroll-to-top button from template */}
-      <div 
-        onClick={scrollToTop}
-        className="fixed bottom-6 right-6 w-11 h-11 bg-blue-600 hover:bg-blue-700 text-white rounded-xl shadow-lg transition-all duration-300 flex items-center justify-center cursor-pointer hover:shadow-xl active:scale-90 z-50 group"
-      >
-        <Rocket className="h-5 w-5 transform -rotate-45 group-hover:-translate-y-0.5 transition-transform" />
-      </div>
 
     </div>
   );
