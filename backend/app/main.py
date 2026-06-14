@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session
 import requests
 
 from app.database import init_db, get_db, SessionLocal, Incident, IncidentLog
-from app.agent import agent_app, log_step
+from app.agent import agent_app, log_step, send_admin_failure_email, MAX_TRIES
 
 # Logging setup
 logging.basicConfig(level=logging.INFO)
@@ -51,12 +51,35 @@ def _has_active_incident(db, service_name: str, alert_name: str) -> bool:
         Incident.status.in_(["INVESTIGATING", "ROOT_CAUSE_FOUND", "EXECUTING_FIX", "VERIFYING"])
     ).first() is not None
 
+def check_max_tries_exceeded(db, service_name: str, alert_name: str, max_tries: int = MAX_TRIES) -> bool:
+    """Check if the number of consecutive failed incidents for this service/alert has reached or exceeded max_tries."""
+    incidents = db.query(Incident).filter(
+        Incident.service == service_name,
+        Incident.alert_name == alert_name
+    ).order_by(Incident.created_at.desc()).all()
+    
+    consecutive_failures = 0
+    for inc in incidents:
+        if inc.status == "FAILED":
+            consecutive_failures += 1
+        elif inc.status == "RESOLVED":
+            break
+            
+    return consecutive_failures >= max_tries
+
 def _create_and_run_incident(service_name: str, alert_name: str, severity: str):
     """Create an incident record and run the agent workflow synchronously."""
     db = SessionLocal()
     try:
         # Double-check dedup inside the monitor thread
         if _has_active_incident(db, service_name, alert_name):
+            return
+
+        # Check if max tries has been reached for consecutive failures
+        if check_max_tries_exceeded(db, service_name, alert_name, MAX_TRIES):
+            logger.warning(
+                f"[HealthMonitor] Alert '{alert_name}' on service '{service_name}' has exceeded maximum tries ({MAX_TRIES}). Automatic self-healing suspended."
+            )
             return
 
         incident_id = f"INC-{datetime.utcnow().strftime('%Y%m%d')}-{str(uuid.uuid4())[:8].upper()}"
@@ -201,11 +224,24 @@ def run_agent_workflow(incident_id: str, service: str, alert_name: str):
         log_step(incident_id, f"Agent workflow execution crashed: {str(e)}", "ERROR")
         
         # Mark incident failed
-        db = next(get_db())
-        incident = db.query(Incident).filter(Incident.id == incident_id).first()
-        if incident:
-            incident.status = "FAILED"
-            db.commit()
+        db = SessionLocal()
+        try:
+            incident = db.query(Incident).filter(Incident.id == incident_id).first()
+            if incident:
+                incident.status = "FAILED"
+                db.commit()
+        except Exception as db_err:
+            logger.error(f"Failed to update crashed incident status: {db_err}")
+        finally:
+            db.close()
+            
+        # Send admin failure email
+        send_admin_failure_email(
+            incident_id=incident_id,
+            service=service,
+            alert_name=alert_name,
+            reason=f"Agent workflow execution crashed: {str(e)}"
+        )
 
 # WebSocket Connection Manager
 class ConnectionManager:
@@ -238,6 +274,80 @@ async def simulation_websocket(websocket: WebSocket):
         manager.disconnect(websocket)
 
 # REST Endpoints
+
+class TestIncidentRequest(BaseModel):
+    risk_level: str  # "low", "medium", "high", "critical"
+
+@app.post("/api/v1/simulation/trigger_test_incident")
+def trigger_test_incident(req: TestIncidentRequest, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
+    risk = req.risk_level.lower()
+    logger.info(f"Triggering simulated test incident for risk level: {risk}")
+    
+    # Define parameters based on target risk level
+    if risk == "low":
+        service_name = "notification-service"
+        alert_name = "LowPriorityWarning"
+        severity = "warning"
+    elif risk == "medium":
+        service_name = "order-service"
+        alert_name = "HighCpuUsage"
+        severity = "warning"
+    elif risk == "high":
+        service_name = "user-service"  # Auth subsystem triggers HIGH minimum
+        alert_name = "HttpErrorSpike"
+        severity = "critical"
+    elif risk == "critical":
+        service_name = "database-service"  # DB subsystem + Destructive runbook triggers CRITICAL
+        alert_name = "DatabaseCorruptionAlert"
+        severity = "critical"
+    else:
+        raise HTTPException(status_code=400, detail=f"Invalid risk level: {req.risk_level}. Choose from low, medium, high, critical.")
+        
+    # Check deduplication
+    active_incident = db.query(Incident).filter(
+        Incident.service == service_name,
+        Incident.alert_name == alert_name,
+        Incident.status.in_(["INVESTIGATING", "ROOT_CAUSE_FOUND", "EXECUTING_FIX", "VERIFYING", "PENDING_APPROVAL"])
+    ).first()
+    
+    if active_incident:
+        logger.info(f"Active incident {active_incident.id} already exists for {service_name}/{alert_name}. Skipping duplicate.")
+        return {"status": "ignored", "message": f"An active incident already exists for {service_name}.", "incident_id": active_incident.id}
+        
+    # Check if max tries has been reached for consecutive failures
+    if check_max_tries_exceeded(db, service_name, alert_name, MAX_TRIES):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Service '{service_name}' Alert '{alert_name}' has exceeded maximum tries ({MAX_TRIES}). Clear faults or reset cluster to retry."
+        )
+        
+    # Create new incident entry
+    incident_id = f"INC-{datetime.utcnow().strftime('%Y%m%d')}-{str(uuid.uuid4())[:8].upper()}"
+    new_incident = Incident(
+        id=incident_id,
+        service=service_name,
+        alert_name=alert_name,
+        severity=severity,
+        status="INVESTIGATING",
+        created_at=datetime.utcnow()
+    )
+    db.add(new_incident)
+    db.commit()
+    
+    # Log initial alert event
+    log_entry = IncidentLog(
+        incident_id=incident_id,
+        level="WARNING",
+        message=f"[Simulation] Triggered test incident for {risk.upper()} risk: '{alert_name}' on service '{service_name}'",
+        timestamp=datetime.utcnow()
+    )
+    db.add(log_entry)
+    db.commit()
+    
+    # Queue the agent running loop in background
+    background_tasks.add_task(run_agent_workflow, incident_id, service_name, alert_name)
+    
+    return {"status": "success", "message": f"Simulated {risk.upper()} risk incident triggered.", "incident_id": incident_id}
 
 @app.get("/")
 def read_root():
@@ -281,6 +391,13 @@ def alerts_webhook(payload: Dict[str, Any], background_tasks: BackgroundTasks, d
         
         if active_incident:
             logger.info(f"Active incident {active_incident.id} already exists for {service_name}/{alert_name}. Skipping duplicate workflow.")
+            continue
+            
+        # Check if max tries has been reached for consecutive failures
+        if check_max_tries_exceeded(db, service_name, alert_name, MAX_TRIES):
+            logger.warning(
+                f"[AlertWebhook] Alert '{alert_name}' on service '{service_name}' has exceeded maximum tries ({MAX_TRIES}). Automatic self-healing suspended."
+            )
             continue
             
         # Create new incident entry
@@ -386,6 +503,20 @@ def clear_simulation_faults():
             results[service] = "Cleared" if resp.status_code == 200 else f"Error: {resp.status_code}"
         except Exception as e:
             results[service] = f"Connection failed: {str(e)}"
+            
+    # Reset consecutive failure counters in db by marking FAILED incidents as RESOLVED
+    db = SessionLocal()
+    try:
+        failed_incidents = db.query(Incident).filter(Incident.status == "FAILED").all()
+        for inc in failed_incidents:
+            inc.status = "RESOLVED"
+            inc.resolution_action = (inc.resolution_action or "") + "\n\n---\nIncident manually cleared/resolved by admin."
+        db.commit()
+        logger.info(f"Marked {len(failed_incidents)} FAILED incidents as RESOLVED due to manual cluster reset.")
+    except Exception as e:
+        logger.error(f"Failed to clear failed incidents on reset: {e}")
+    finally:
+        db.close()
             
     return {"status": "success", "cleared_services": results}
 

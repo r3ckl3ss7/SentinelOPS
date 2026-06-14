@@ -2,20 +2,20 @@
 
 import { useEffect, useState, useRef } from "react";
 import Link from "next/link";
-import { 
-  Activity, 
-  AlertTriangle, 
-  CheckCircle, 
-  Cpu, 
-  Database, 
-  Flame, 
-  HardDrive, 
-  Layers, 
-  Play, 
-  RefreshCw, 
-  Server, 
-  Terminal, 
-  Trash2, 
+import {
+  Activity,
+  AlertTriangle,
+  CheckCircle,
+  Cpu,
+  Database,
+  Flame,
+  HardDrive,
+  Layers,
+  Play,
+  RefreshCw,
+  Server,
+  Terminal,
+  Trash2,
   ArrowRight,
   Download,
   AlertOctagon,
@@ -46,7 +46,7 @@ interface Incident {
   id: string;
   service: string;
   alert_name: string;
-  status: "INVESTIGATING" | "ROOT_CAUSE_FOUND" | "EXECUTING_FIX" | "VERIFYING" | "RESOLVED" | "FAILED";
+  status: "INVESTIGATING" | "ROOT_CAUSE_FOUND" | "EXECUTING_FIX" | "VERIFYING" | "PENDING_APPROVAL" | "RESOLVED" | "FAILED";
   severity: string;
   root_cause?: string;
   confidence?: number;           // 0-100 from RCA
@@ -68,7 +68,7 @@ interface IncidentLog {
   message: string;
 }
 
-// Seeding initial metrics to make KDE graphs look beautiful instantly
+// Seeding initial metrics to make history trends look beautiful instantly
 const seedHistory = (currentVal: number, isCpu: boolean): number[] => {
   const samples: number[] = [];
   const count = 25;
@@ -98,64 +98,39 @@ function KdeChart({ samples, minVal, maxVal, label, colorClass, gradientId, valu
   const [hoveredIdx, setHoveredIdx] = useState<number | null>(null);
 
   const n = samples.length;
-  const mean = samples.reduce((a, b) => a + b, 0) / n;
-  const variance = samples.reduce((sum, val) => sum + Math.pow(val - mean, 2), 0) / n;
-  const stdDev = Math.sqrt(variance);
-  
   const isCpu = maxVal <= 1.5;
-  const minBandwidth = isCpu ? 0.08 : 6.0;
-  const h = Math.max(1.06 * stdDev * Math.pow(n, -0.2), minBandwidth);
-
-  const pointsCount = 40;
-  const xPoints: number[] = [];
-  const yValues: number[] = [];
-
-  const gaussianKernel = (u: number) => Math.exp(-0.5 * u * u) / Math.sqrt(2 * Math.PI);
-
-  for (let i = 0; i < pointsCount; i++) {
-    const x = minVal + (i * (maxVal - minVal)) / (pointsCount - 1);
-    xPoints.push(x);
-
-    let sum = 0;
-    for (let j = 0; j < n; j++) {
-      sum += gaussianKernel((x - samples[j]) / h);
-    }
-    const y = sum / (n * h);
-    yValues.push(y);
-  }
-
-  const maxY = Math.max(...yValues, 0.0001);
 
   const width = 360;
   const height = 120;
   const paddingBottom = 15;
   const chartHeight = height - paddingBottom;
 
-  let pathD = `M 0 ${chartHeight}`;
-  xPoints.forEach((x, idx) => {
-    const xPct = (idx / (pointsCount - 1)) * width;
-    const yPct = chartHeight - (yValues[idx] / maxY) * (chartHeight - 6);
-    pathD += ` L ${xPct} ${yPct}`;
-  });
-  pathD += ` L ${width} ${chartHeight} Z`;
+  const getY = (val: number) => {
+    const clampedVal = Math.max(minVal, Math.min(maxVal, val));
+    return chartHeight - ((clampedVal - minVal) / (maxVal - minVal)) * (chartHeight - 6);
+  };
 
+  let areaD = `M 0 ${chartHeight}`;
   let lineD = "";
-  xPoints.forEach((x, idx) => {
-    const xPct = (idx / (pointsCount - 1)) * width;
-    const yPct = chartHeight - (yValues[idx] / maxY) * (chartHeight - 6);
-    if (idx === 0) {
-      lineD = `M ${xPct} ${yPct}`;
-    } else {
-      lineD += ` L ${xPct} ${yPct}`;
-    }
-  });
 
-  const latestValue = samples[samples.length - 1];
+  for (let i = 0; i < n; i++) {
+    const x = (i / (n - 1)) * width;
+    const y = getY(samples[i]);
+    areaD += ` L ${x} ${y}`;
+    if (i === 0) {
+      lineD = `M ${x} ${y}`;
+    } else {
+      lineD += ` L ${x} ${y}`;
+    }
+  }
+  areaD += ` L ${width} ${chartHeight} Z`;
+
+  const latestValue = samples[n - 1];
 
   const handleMouseMove = (e: React.MouseEvent<SVGSVGElement, MouseEvent>) => {
     const rect = e.currentTarget.getBoundingClientRect();
     const pct = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
-    const idx = Math.round(pct * (pointsCount - 1));
+    const idx = Math.round(pct * (n - 1));
     setHoveredIdx(idx);
   };
 
@@ -163,27 +138,26 @@ function KdeChart({ samples, minVal, maxVal, label, colorClass, gradientId, valu
     setHoveredIdx(null);
   };
 
-  const hoveredX = hoveredIdx !== null ? (hoveredIdx / (pointsCount - 1)) * width : null;
-  const hoveredY = hoveredIdx !== null ? chartHeight - (yValues[hoveredIdx] / maxY) * (chartHeight - 6) : null;
-  const hoveredVal = hoveredIdx !== null ? xPoints[hoveredIdx] : null;
-  const hoveredProb = hoveredIdx !== null ? (yValues[hoveredIdx] / maxY) : null;
+  const hoveredX = hoveredIdx !== null ? (hoveredIdx / (n - 1)) * width : null;
+  const hoveredVal = hoveredIdx !== null ? samples[hoveredIdx] : null;
+  const hoveredY = hoveredVal !== null ? getY(hoveredVal) : null;
 
   return (
     <div className="flex flex-col space-y-2.5 bg-slate-50/50 p-3 rounded-xl border border-slate-100/80 hover:bg-slate-50/80 transition-all duration-200 relative">
       <div className="flex justify-between items-center text-[10px] font-bold text-slate-500 uppercase tracking-wider">
         <span className="flex items-center gap-1.5">
           <span className={`h-1.5 w-1.5 rounded-full ${isCpu ? "bg-blue-600 animate-pulse" : "bg-indigo-600 animate-pulse"}`} />
-          {label} density
+          {label} Trend
         </span>
         <span className="font-mono text-slate-800 bg-white px-2 py-0.5 rounded border border-slate-100 shadow-sm text-[10px]">
           Current: {formatter(latestValue)}{valueSuffix}
         </span>
       </div>
-      
+
       <div className="relative h-[90px] w-full">
-        <svg 
-          viewBox={`0 0 ${width} ${height}`} 
-          className="w-full h-full overflow-visible cursor-crosshair" 
+        <svg
+          viewBox={`0 0 ${width} ${height}`}
+          className="w-full h-full overflow-visible cursor-crosshair"
           preserveAspectRatio="none"
           onMouseMove={handleMouseMove}
           onMouseLeave={handleMouseLeave}
@@ -195,53 +169,53 @@ function KdeChart({ samples, minVal, maxVal, label, colorClass, gradientId, valu
             </linearGradient>
           </defs>
 
-          {/* Grid line */}
-          <line x1="0" y1={chartHeight} x2={width} y2={chartHeight} stroke="#e2e8f0" strokeWidth="1" strokeDasharray="2,2" />
-          
+          {/* Grid lines */}
+          <line x1="0" y1={chartHeight * 0.25} x2={width} y2={chartHeight * 0.25} stroke="#f1f5f9" strokeWidth="1" />
+          <line x1="0" y1={chartHeight * 0.5} x2={width} y2={chartHeight * 0.5} stroke="#f1f5f9" strokeWidth="1" />
+          <line x1="0" y1={chartHeight * 0.75} x2={width} y2={chartHeight * 0.75} stroke="#f1f5f9" strokeWidth="1" />
+          <line x1="0" y1={chartHeight} x2={width} y2={chartHeight} stroke="#e2e8f0" strokeWidth="1.5" />
+
+          {/* Value guidelines / labels inside SVG */}
+          <text x={4} y={12} fill="#94a3b8" fontSize="8" fontFamily="monospace" className="opacity-60 font-bold">{formatter(maxVal)}{valueSuffix}</text>
+          <text x={4} y={chartHeight - 4} fill="#94a3b8" fontSize="8" fontFamily="monospace" className="opacity-60 font-bold">{formatter(minVal)}{valueSuffix}</text>
+
           {/* Filled Area */}
-          <path d={pathD} fill={`url(#${gradientId})`} />
-          
+          <path d={areaD} fill={`url(#${gradientId})`} />
+
           {/* Top Line */}
           <path d={lineD} fill="none" stroke={isCpu ? "#2563eb" : "#4f46e5"} strokeWidth="1.5" strokeLinecap="round" />
 
-          {/* Value Pin Indicator */}
-          {latestValue >= minVal && latestValue <= maxVal && (() => {
-            const latestPct = ((latestValue - minVal) / (maxVal - minVal)) * width;
-            return (
-              <>
-                <line x1={latestPct} y1={0} x2={latestPct} y2={chartHeight} stroke={isCpu ? "#ef4444" : "#f59e0b"} strokeWidth="1.2" strokeDasharray="2,2" />
-                <circle cx={latestPct} cy={chartHeight} r="2.5" fill={isCpu ? "#ef4444" : "#f59e0b"} />
-              </>
-            );
-          })()}
+          {/* Latest value dot and glowing pulse */}
+          <circle cx={width} cy={getY(latestValue)} r="3" fill={isCpu ? "#2563eb" : "#4f46e5"} stroke="#ffffff" strokeWidth="1.5" />
+          <circle cx={width} cy={getY(latestValue)} r="7" fill={isCpu ? "#2563eb" : "#4f46e5"} className="animate-ping opacity-35 pointer-events-none" />
 
           {/* Interactive Hover Indicators */}
           {hoveredX !== null && hoveredY !== null && (
             <>
-              <line 
-                x1={hoveredX} 
-                y1={0} 
-                x2={hoveredX} 
-                y2={chartHeight} 
-                stroke={isCpu ? "#3b82f6" : "#6366f1"} 
-                strokeWidth="1.2" 
-                strokeDasharray="3,3" 
+              <line
+                x1={hoveredX}
+                y1={0}
+                x2={hoveredX}
+                y2={chartHeight}
+                stroke={isCpu ? "#3b82f6" : "#6366f1"}
+                strokeWidth="1.2"
+                strokeDasharray="3,3"
               />
-              <circle 
-                cx={hoveredX} 
-                cy={hoveredY} 
-                r="4" 
-                fill={isCpu ? "#2563eb" : "#4f46e5"} 
-                stroke="#ffffff" 
-                strokeWidth="1.5" 
+              <circle
+                cx={hoveredX}
+                cy={hoveredY}
+                r="4"
+                fill={isCpu ? "#2563eb" : "#4f46e5"}
+                stroke="#ffffff"
+                strokeWidth="1.5"
               />
             </>
           )}
         </svg>
 
         {/* Floating Tooltip */}
-        {hoveredIdx !== null && hoveredVal !== null && hoveredProb !== null && hoveredX !== null && hoveredY !== null && (
-          <div 
+        {hoveredIdx !== null && hoveredVal !== null && hoveredX !== null && hoveredY !== null && (
+          <div
             className="absolute z-10 pointer-events-none bg-slate-900/95 text-white font-mono text-[9px] px-2 py-1.5 rounded shadow-lg border border-slate-700/80 flex flex-col space-y-0.5 min-w-[95px] backdrop-blur-sm transition-all duration-75"
             style={{
               left: `${(hoveredX / width) * 100}%`,
@@ -254,17 +228,18 @@ function KdeChart({ samples, minVal, maxVal, label, colorClass, gradientId, valu
               <span className="text-white">{formatter(hoveredVal)}{valueSuffix}</span>
             </div>
             <div className="flex justify-between gap-2 text-slate-400">
-              <span>PROB</span>
-              <span className="text-blue-300 font-bold">{(hoveredProb * 100).toFixed(0)}%</span>
+              <span>TIME</span>
+              <span className="text-blue-300 font-bold">
+                {hoveredIdx === n - 1 ? "Now" : `t-${n - 1 - hoveredIdx}`}
+              </span>
             </div>
           </div>
         )}
       </div>
 
       <div className="flex justify-between text-[8px] font-mono text-slate-400 px-0.5">
-        <span>{formatter(minVal)}</span>
-        <span>{formatter((minVal + maxVal) / 2)}</span>
-        <span>{formatter(maxVal)}</span>
+        <span>History Start</span>
+        <span>Live</span>
       </div>
     </div>
   );
@@ -279,6 +254,7 @@ export default function DashboardPage() {
   const [loadingServices, setLoadingServices] = useState(true);
   const [injectingFault, setInjectingFault] = useState<string | null>(null);
   const [clearingFaults, setClearingFaults] = useState(false);
+  const [triggeringRisk, setTriggeringRisk] = useState<string | null>(null);
   const [filterActive, setFilterActive] = useState(false);
 
   const consoleRef = useRef<HTMLDivElement>(null);
@@ -321,10 +297,10 @@ export default function DashboardPage() {
         if (iRes.ok) {
           const data = await iRes.json();
           setIncidents(data);
-          
+
           if (!selectedIncidentId && data.length > 0) {
-            const activeIncident = data.find((inc: Incident) => 
-              ["INVESTIGATING", "ROOT_CAUSE_FOUND", "EXECUTING_FIX", "VERIFYING"].includes(inc.status)
+            const activeIncident = data.find((inc: Incident) =>
+              ["INVESTIGATING", "ROOT_CAUSE_FOUND", "EXECUTING_FIX", "VERIFYING", "PENDING_APPROVAL"].includes(inc.status)
             );
             if (activeIncident) {
               setSelectedIncidentId(activeIncident.id);
@@ -458,6 +434,34 @@ export default function DashboardPage() {
     }
   }, [logs]);
 
+  // Trigger a simulated test incident for risk classification testing
+  const triggerTestIncident = async (riskLevel: string) => {
+    setTriggeringRisk(riskLevel);
+    try {
+      const res = await fetch(`${API_URL}/api/v1/simulation/trigger_test_incident`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ risk_level: riskLevel })
+      });
+      if (!res.ok) {
+        throw new Error(await res.text());
+      }
+      // Refresh incidents feed instantly
+      const incRes = await fetch(`${API_URL}/api/v1/incidents`);
+      if (incRes.ok) {
+        const data = await incRes.json();
+        setIncidents(data);
+        if (data.length > 0) {
+          setSelectedIncidentId(data[0].id);
+        }
+      }
+    } catch (err) {
+      console.error("Failed to trigger simulated incident:", err);
+    } finally {
+      setTriggeringRisk(null);
+    }
+  };
+
   // Inject a fault
   const injectFault = async (service: string, fault: string) => {
     const key = `${service}-${fault}`;
@@ -547,6 +551,8 @@ export default function DashboardPage() {
         return <span className="px-2 py-0.5 text-[10px] font-bold tracking-wider rounded border border-amber-200 bg-amber-50 text-amber-600 animate-pulse">REMEDIATING</span>;
       case "VERIFYING":
         return <span className="px-2 py-0.5 text-[10px] font-bold tracking-wider rounded border border-cyan-200 bg-cyan-50 text-cyan-600 animate-pulse">VERIFYING</span>;
+      case "PENDING_APPROVAL":
+        return <span className="px-2 py-0.5 text-[10px] font-bold tracking-wider rounded border border-orange-200 bg-orange-50 text-orange-700 animate-pulse">PENDING APPROVAL</span>;
       case "RESOLVED":
         return <span className="px-2 py-0.5 text-[10px] font-bold tracking-wider rounded border border-emerald-200 bg-emerald-50 text-emerald-600">RESOLVED</span>;
       default:
@@ -572,16 +578,16 @@ export default function DashboardPage() {
   };
 
   const selectedIncident = incidents.find(inc => inc.id === selectedIncidentId);
-  const activeIncidentsCount = incidents.filter(inc => ["INVESTIGATING", "ROOT_CAUSE_FOUND", "EXECUTING_FIX", "VERIFYING"].includes(inc.status)).length;
+  const activeIncidentsCount = incidents.filter(inc => ["INVESTIGATING", "ROOT_CAUSE_FOUND", "EXECUTING_FIX", "VERIFYING", "PENDING_APPROVAL"].includes(inc.status)).length;
   const clusterIsHealthy = Object.values(services).every(s => s.status === "healthy");
 
-  const filteredIncidents = filterActive 
-    ? incidents.filter(inc => ["INVESTIGATING", "ROOT_CAUSE_FOUND", "EXECUTING_FIX", "VERIFYING"].includes(inc.status))
+  const filteredIncidents = filterActive
+    ? incidents.filter(inc => ["INVESTIGATING", "ROOT_CAUSE_FOUND", "EXECUTING_FIX", "VERIFYING", "PENDING_APPROVAL"].includes(inc.status))
     : incidents;
 
   return (
     <div className="relative min-h-screen bg-[#f8fafc] text-slate-800 flex flex-col font-sans overflow-x-hidden">
-      
+
       {/* Decorative Background Shapes */}
       <div className="absolute top-0 left-0 w-[500px] h-[500px] rounded-full bg-gradient-to-br from-blue-100/30 via-cyan-50/20 to-transparent blur-3xl pointer-events-none -z-10" />
       <div className="absolute top-[-100px] right-[-100px] w-[450px] h-[450px] rounded-full bg-gradient-to-br from-[#0942e6] to-[#0033cc] opacity-[0.95] pointer-events-none -z-10 shadow-2xl" />
@@ -632,7 +638,7 @@ export default function DashboardPage() {
             <RefreshCw className={`h-3 w-3 ${clearingFaults ? "animate-spin" : ""}`} />
             <span>Reset Cluster</span>
           </button>
-          
+
           <div className="p-2 rounded-full hover:bg-slate-50 text-slate-700 transition-colors cursor-pointer">
             <User className="h-4.5 w-4.5" />
           </div>
@@ -641,7 +647,7 @@ export default function DashboardPage() {
 
       {/* SRE Operations Center */}
       <main id="ops-center" className="flex-grow px-8 py-8 max-w-[1400px] mx-auto w-full">
-        
+
         <div className="mb-6 flex flex-col md:flex-row md:items-end md:justify-between gap-4">
           <div>
             <div className="flex items-center gap-2 mb-1">
@@ -653,7 +659,7 @@ export default function DashboardPage() {
               A unified live telemetry console. Manually inject anomalies using service triggers, or click "Trigger Outage" above to watch the agent perform self-healing.
             </p>
           </div>
-          
+
           {/* Cluster Status Summary Badge */}
           <div className="flex items-center gap-3 bg-white p-3 rounded-xl border border-slate-100 shadow-sm self-start md:self-auto text-xs">
             <div className="flex flex-col">
@@ -666,7 +672,7 @@ export default function DashboardPage() {
           </div>
         </div>
 
-        {/* Global Telemetry Distribution Profiles Grid (KDE Analysis) */}
+        {/* Global Telemetry Real-time Trend Profiles */}
         <div className="mb-6 bg-white border border-slate-100 shadow-[0_10px_30px_rgba(0,0,0,0.02)] rounded-2xl p-5 w-full">
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between mb-4 gap-2 border-b border-slate-50 pb-3">
             <div>
@@ -674,11 +680,11 @@ export default function DashboardPage() {
                 <span className="h-2 w-2 rounded-full bg-blue-600 animate-ping"></span>
                 <h4 className="text-xs font-bold uppercase tracking-widest text-slate-600 flex items-center gap-1.5">
                   <Activity className="h-4 w-4 text-blue-600" />
-                  <span>Telemetry Probability Distribution Profiles (KDE Analysis)</span>
+                  <span>Telemetry Real-time History Trends</span>
                 </h4>
               </div>
               <p className="text-[10px] text-slate-400 font-medium">
-                Kernel Density Estimation curves show frequency metrics profile over a sliding window. Vertical dashed lines mark the current state.
+                Live timeline charts show resource metrics profile over a sliding window. Glowing dots mark the latest state.
               </p>
             </div>
           </div>
@@ -689,7 +695,7 @@ export default function DashboardPage() {
               if (!history) return null;
 
               return (
-                <div 
+                <div
                   key={service.name}
                   className="bg-slate-50/40 border border-slate-100/60 rounded-xl p-3.5 flex flex-col space-y-3.5 relative"
                 >
@@ -701,7 +707,7 @@ export default function DashboardPage() {
                     </span>
                   </div>
 
-                  {/* KDE Charts Stacked */}
+                  {/* Live History Charts Stacked */}
                   <div className="flex flex-col space-y-3.5">
                     <KdeChart
                       samples={history.cpu}
@@ -732,7 +738,7 @@ export default function DashboardPage() {
 
         {/* Unified 3-panel Dashboard Layout */}
         <div className="bg-white border border-slate-100 shadow-[0_15px_50px_rgba(0,0,0,0.03)] rounded-2xl overflow-hidden flex flex-col lg:flex-row lg:h-[650px] w-full divide-y lg:divide-y-0 lg:divide-x divide-slate-100">
-          
+
           {/* Panel 1: Simulated Microservices */}
           <div className="w-full lg:w-[35%] flex flex-col h-[500px] lg:h-full overflow-hidden bg-slate-50/10">
             <div className="p-4 bg-slate-50 border-b border-slate-100 flex items-center justify-between">
@@ -740,11 +746,10 @@ export default function DashboardPage() {
                 <Server className="h-4 w-4 text-blue-600" />
                 <span>Telemetry & Fault Injector</span>
               </h4>
-              <div className={`flex items-center space-x-1.5 px-2.5 py-1 rounded-full border text-[9px] font-bold tracking-wide ${
-                clusterIsHealthy 
-                  ? "bg-emerald-50 border-emerald-100 text-emerald-600" 
-                  : "bg-red-50 border-red-100 text-red-600 animate-pulse"
-              }`}>
+              <div className={`flex items-center space-x-1.5 px-2.5 py-1 rounded-full border text-[9px] font-bold tracking-wide ${clusterIsHealthy
+                ? "bg-emerald-50 border-emerald-100 text-emerald-600"
+                : "bg-red-50 border-red-100 text-red-600 animate-pulse"
+                }`}>
                 <span className={`h-1.5 w-1.5 rounded-full ${clusterIsHealthy ? "bg-emerald-500" : "bg-red-500"}`}></span>
                 <span>{clusterIsHealthy ? "HEALTHY" : "ANOMALY"}</span>
               </div>
@@ -758,7 +763,7 @@ export default function DashboardPage() {
                 </div>
               ) : (
                 Object.values(services).map((service) => (
-                  <div 
+                  <div
                     key={service.name}
                     className="p-3.5 bg-white border border-slate-100 rounded-xl shadow-[0_3px_8px_rgba(0,0,0,0.01)] hover:shadow-md transition-all flex flex-col space-y-2.5"
                   >
@@ -776,7 +781,7 @@ export default function DashboardPage() {
                           <span className="font-mono font-bold text-slate-600">{(service.cpu * 100).toFixed(0)}%</span>
                         </div>
                         <div className="w-full bg-slate-100 h-1.5 rounded-full overflow-hidden">
-                          <div 
+                          <div
                             className={`h-full rounded-full transition-all duration-300 ${service.cpu > 0.8 ? "bg-red-500" : service.cpu > 0.4 ? "bg-amber-500" : "bg-blue-600"}`}
                             style={{ width: `${Math.min(service.cpu * 100, 100)}%` }}
                           ></div>
@@ -789,7 +794,7 @@ export default function DashboardPage() {
                           <span className="font-mono font-bold text-slate-600">{service.memory.toFixed(0)} MB</span>
                         </div>
                         <div className="w-full bg-slate-100 h-1.5 rounded-full overflow-hidden">
-                          <div 
+                          <div
                             className={`h-full rounded-full transition-all duration-300 ${service.memory > 80 ? "bg-red-500 animate-pulse" : service.memory > 45 ? "bg-amber-500" : "bg-blue-600"}`}
                             style={{ width: `${Math.min((service.memory / 120) * 100, 100)}%` }}
                           ></div>
@@ -797,281 +802,316 @@ export default function DashboardPage() {
                       </div>
                     </div>
 
-                    {["payment-service", "order-service", "api-gateway"].includes(service.name) && (
-                      <div className="pt-2 border-t border-slate-100 flex items-center justify-between gap-1 flex-wrap">
-                        {service.name === "payment-service" && (
-                          <button
-                            onClick={() => injectFault(service.name, "memory-leak")}
-                            disabled={injectingFault !== null || service.status === "offline"}
-                            className="px-2.5 py-0.5 text-[9px] font-bold text-red-500 hover:text-white border border-red-500/25 hover:bg-red-500 active:bg-red-600 rounded-full transition-all duration-150 disabled:opacity-40"
-                          >
-                            {injectingFault === `${service.name}-memory-leak` ? "Leaking..." : "Leak Mem"}
-                          </button>
-                        )}
-                        {service.name === "order-service" && (
-                          <button
-                            onClick={() => injectFault(service.name, "cpu-spike")}
-                            disabled={injectingFault !== null || service.status === "offline"}
-                            className="px-2.5 py-0.5 text-[9px] font-bold text-amber-600 hover:text-white border border-amber-500/25 hover:bg-amber-500 active:bg-amber-600 rounded-full transition-all duration-150 disabled:opacity-40"
-                          >
-                            {injectingFault === `${service.name}-cpu-spike` ? "Spiking..." : "Spike CPU"}
-                          </button>
-                        )}
-                        <button
-                          onClick={() => injectFault(service.name, "error-spike")}
-                          disabled={injectingFault !== null || service.status === "offline"}
-                          className="px-2.5 py-0.5 text-[9px] font-bold text-rose-500 hover:text-white border border-rose-500/25 hover:bg-rose-500 active:bg-[#f43f5e] rounded-full transition-all duration-150 disabled:opacity-40"
-                        >
-                          {injectingFault === `${service.name}-error-spike` ? "Injecting..." : "Fail HTTP"}
-                        </button>
-                      </div>
-                    )}
+                    <div className="pt-2 border-t border-slate-100 flex items-center justify-between gap-1 flex-wrap">
+                      <button
+                        onClick={() => injectFault(service.name, "memory-leak")}
+                        disabled={injectingFault !== null || service.status === "offline"}
+                        className="px-2 py-0.5 text-[9px] font-bold text-red-500 hover:text-white border border-red-500/25 hover:bg-red-500 active:bg-red-600 rounded-full transition-all duration-150 disabled:opacity-40 cursor-pointer"
+                      >
+                        {injectingFault === `${service.name}-memory-leak` ? "Leaking..." : "Leak Mem"}
+                      </button>
+                      <button
+                        onClick={() => injectFault(service.name, "cpu-spike")}
+                        disabled={injectingFault !== null || service.status === "offline"}
+                        className="px-2 py-0.5 text-[9px] font-bold text-amber-600 hover:text-white border border-amber-500/25 hover:bg-amber-500 active:bg-amber-600 rounded-full transition-all duration-150 disabled:opacity-40 cursor-pointer"
+                      >
+                        {injectingFault === `${service.name}-cpu-spike` ? "Spiking..." : "Spike CPU"}
+                      </button>
+                      <button
+                        onClick={() => injectFault(service.name, "error-spike")}
+                        disabled={injectingFault !== null || service.status === "offline"}
+                        className="px-2 py-0.5 text-[9px] font-bold text-rose-500 hover:text-white border border-rose-500/25 hover:bg-rose-500 active:bg-[#f43f5e] rounded-full transition-all duration-150 disabled:opacity-40 cursor-pointer"
+                      >
+                        {injectingFault === `${service.name}-error-spike` ? "Injecting..." : "Fail HTTP"}
+                      </button>
+                    </div>
                   </div>
                 ))
               )}
             </div>
+
+
+            {/* Safety & Governance Risk Console */}
+            <div className="p-4 bg-slate-900 border border-slate-800 rounded-xl shadow-lg flex flex-col space-y-3 mt-4 text-white">
+              <div className="flex items-center space-x-2">
+                <Shield className="h-4 w-4 text-blue-400 animate-pulse" />
+                <span className="text-xs font-bold uppercase tracking-wider text-slate-200">Safety & Governance Risk Console</span>
+              </div>
+              <p className="text-[10px] text-slate-400 leading-relaxed">
+                Inject simulated outages with specific parameters to test the SRE safety gates, risk classifications, and email approval processes.
+              </p>
+              <div className="grid grid-cols-2 gap-2 pt-1.5">
+                <button
+                  onClick={() => triggerTestIncident("low")}
+                  disabled={triggeringRisk !== null}
+                  className="flex items-center justify-between px-3 py-2 text-[10px] font-bold bg-slate-800/80 hover:bg-slate-700/80 border border-slate-700/40 rounded-lg text-emerald-400 hover:text-emerald-300 transition-all duration-150 cursor-pointer disabled:opacity-40"
+                >
+                  <span>Low Risk</span>
+                  <span className="text-[8px] bg-emerald-500/10 px-1.5 py-0.5 rounded text-emerald-400 border border-emerald-500/20 font-mono font-bold">AUTO</span>
+                </button>
+                <button
+                  onClick={() => triggerTestIncident("medium")}
+                  disabled={triggeringRisk !== null}
+                  className="flex items-center justify-between px-3 py-2 text-[10px] font-bold bg-slate-800/80 hover:bg-slate-700/80 border border-slate-700/40 rounded-lg text-amber-400 hover:text-amber-300 transition-all duration-150 cursor-pointer disabled:opacity-40"
+                >
+                  <span>Medium Risk</span>
+                  <span className="text-[8px] bg-amber-500/10 px-1.5 py-0.5 rounded text-amber-400 border border-amber-500/20 font-mono font-bold">AUTO</span>
+                </button>
+                <button
+                  onClick={() => triggerTestIncident("high")}
+                  disabled={triggeringRisk !== null}
+                  className="flex items-center justify-between px-3 py-2 text-[10px] font-bold bg-slate-800/80 hover:bg-slate-700/80 border border-slate-700/40 rounded-lg text-orange-400 hover:text-orange-300 transition-all duration-150 cursor-pointer disabled:opacity-40"
+                >
+                  <span>High Risk</span>
+                  <span className="text-[8px] bg-orange-500/10 px-1.5 py-0.5 rounded text-orange-400 border border-orange-500/20 font-mono font-bold">HALT</span>
+                </button>
+                <button
+                  onClick={() => triggerTestIncident("critical")}
+                  disabled={triggeringRisk !== null}
+                  className="flex items-center justify-between px-3 py-2 text-[10px] font-bold bg-slate-800/80 hover:bg-slate-700/80 border border-slate-700/40 rounded-lg text-rose-500 hover:text-rose-400 transition-all duration-150 cursor-pointer disabled:opacity-40"
+                >
+                  <span>Critical Risk</span>
+                  <span className="text-[8px] bg-rose-500/10 px-1.5 py-0.5 rounded text-rose-500 border border-rose-500/20 font-mono font-bold">HALT</span>
+                </button>
+              </div>
+            </div>
           </div>
 
-          {/* Panel 2: Incident Feed */}
-          <div className="w-full lg:w-[25%] flex flex-col h-[400px] lg:h-full overflow-hidden bg-white">
-            <div className="p-4 border-b border-slate-100 flex items-center justify-between">
-              <h4 className="text-xs font-bold uppercase tracking-wider text-slate-500 flex items-center space-x-1.5">
-                <AlertTriangle className="h-4 w-4 text-amber-500" />
-                <span>Incident Feed</span>
-              </h4>
-              <button 
-                onClick={() => setFilterActive(!filterActive)}
-                className={`text-[9px] px-2.5 py-1 rounded-full border font-bold tracking-wider uppercase transition-colors cursor-pointer ${
-                  filterActive 
-                    ? "bg-blue-600 border-blue-600 text-white" 
-                    : "bg-transparent border-slate-200 text-slate-500 hover:text-slate-700"
+        {/* Panel 2: Incident Feed */}
+        <div className="w-full lg:w-[25%] flex flex-col h-[400px] lg:h-full overflow-hidden bg-white">
+          <div className="p-4 border-b border-slate-100 flex items-center justify-between">
+            <h4 className="text-xs font-bold uppercase tracking-wider text-slate-500 flex items-center space-x-1.5">
+              <AlertTriangle className="h-4 w-4 text-amber-500" />
+              <span>Incident Feed</span>
+            </h4>
+            <button
+              onClick={() => setFilterActive(!filterActive)}
+              className={`text-[9px] px-2.5 py-1 rounded-full border font-bold tracking-wider uppercase transition-colors cursor-pointer ${filterActive
+                ? "bg-blue-600 border-blue-600 text-white"
+                : "bg-transparent border-slate-200 text-slate-500 hover:text-slate-700"
                 }`}
-              >
-                {filterActive ? "Resolved" : "Active Only"}
-              </button>
-            </div>
-
-            <div className="flex-1 overflow-y-auto p-4 space-y-3.5">
-              {filteredIncidents.length === 0 ? (
-                <div className="h-40 flex flex-col items-center justify-center text-slate-400 text-center space-y-2 border border-dashed border-slate-200 rounded-xl">
-                  <CheckCircle className="h-7 w-7 text-emerald-500 animate-pulse" />
-                  <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">System Stable</span>
-                </div>
-              ) : (
-                filteredIncidents.map((incident) => {
-                  const isSelected = incident.id === selectedIncidentId;
-                  return (
-                    <div
-                      key={incident.id}
-                      onClick={() => setSelectedIncidentId(incident.id)}
-                      className={`p-4 rounded-xl border text-left cursor-pointer transition-all flex flex-col space-y-2.5 relative overflow-hidden ${
-                        isSelected 
-                          ? "bg-blue-50/20 border-blue-600/30 shadow-[0_4px_12px_rgba(9,66,230,0.03)]" 
-                          : "bg-slate-50/30 border-slate-100 hover:border-slate-200"
-                      }`}
-                    >
-                      <div className="flex items-center justify-between">
-                        <span className="font-mono text-[10px] font-bold text-slate-500">{incident.id}</span>
-                        {getIncidentStatusBadge(incident.status)}
-                      </div>
-
-                      <div>
-                        <h4 className="font-bold text-xs text-slate-800">
-                          {incident.alert_name}
-                        </h4>
-                        <div className="text-slate-400 text-[9px] mt-0.5 flex items-center space-x-1">
-                          <span>Target:</span>
-                          <span className="font-mono text-slate-700 font-semibold">{incident.service}</span>
-                        </div>
-                      </div>
-
-                      <div className="flex items-center justify-between pt-2 border-t border-slate-100 text-[9px] text-slate-400">
-                        <span className="flex items-center space-x-1">
-                          <Clock className="h-3.5 w-3.5" />
-                          <span>{formatTime(incident.created_at)}</span>
-                        </span>
-                        {incident.resolution_time_seconds && (
-                          <span className="font-mono font-bold text-slate-600">MTTR: {incident.resolution_time_seconds.toFixed(0)}s</span>
-                        )}
-                      </div>
-                    </div>
-                  );
-                })
-              )}
-            </div>
+            >
+              {filterActive ? "Resolved" : "Active Only"}
+            </button>
           </div>
 
-          {/* Panel 3: SRE Agent Console Terminal */}
-          <div className="w-full lg:w-[40%] flex flex-col h-[500px] lg:h-full overflow-hidden bg-slate-50/10">
-            <div className="p-4 bg-slate-50 border-b border-slate-100 flex items-center justify-between">
-              <h4 className="text-xs font-bold uppercase tracking-wider text-slate-500 flex items-center space-x-1.5">
-                <Terminal className="h-4 w-4 text-slate-600" />
-                <span>SRE Agent Log & Reports</span>
-              </h4>
-            </div>
+          <div className="flex-1 overflow-y-auto p-4 space-y-3.5">
+            {filteredIncidents.length === 0 ? (
+              <div className="h-40 flex flex-col items-center justify-center text-slate-400 text-center space-y-2 border border-dashed border-slate-200 rounded-xl">
+                <CheckCircle className="h-7 w-7 text-emerald-500 animate-pulse" />
+                <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">System Stable</span>
+              </div>
+            ) : (
+              filteredIncidents.map((incident) => {
+                const isSelected = incident.id === selectedIncidentId;
+                return (
+                  <div
+                    key={incident.id}
+                    onClick={() => setSelectedIncidentId(incident.id)}
+                    className={`p-4 rounded-xl border text-left cursor-pointer transition-all flex flex-col space-y-2.5 relative overflow-hidden ${isSelected
+                      ? "bg-blue-50/20 border-blue-600/30 shadow-[0_4px_12px_rgba(9,66,230,0.03)]"
+                      : "bg-slate-50/30 border-slate-100 hover:border-slate-200"
+                      }`}
+                  >
+                    <div className="flex items-center justify-between">
+                      <span className="font-mono text-[10px] font-bold text-slate-500">{incident.id}</span>
+                      {getIncidentStatusBadge(incident.status)}
+                    </div>
 
-            {selectedIncident ? (
-              <div className="flex-1 flex flex-col p-4 overflow-hidden space-y-3">
-                {/* Meta details dashboard inside Panel 3 */}
-                <div className="p-3 bg-white border border-slate-100 rounded-xl text-[10px] space-y-2.5 flex flex-col shadow-[0_4px_12px_rgba(0,0,0,0.01)] shrink-0">
-                  <div className="grid grid-cols-2 gap-1.5 text-slate-500 font-medium">
-                    <div>ID: <span className="font-mono font-bold text-slate-800">{selectedIncident.id}</span></div>
-                    <div>Status: <span className="font-bold text-slate-800">{selectedIncident.status}</span></div>
-                    <div>Target: <span className="font-mono font-bold text-slate-800">{selectedIncident.service}</span></div>
-                    {selectedIncident.resolution_time_seconds && (
-                      <div>MTTR: <span className="font-bold text-slate-800">{selectedIncident.resolution_time_seconds}s</span></div>
-                    )}
+                    <div>
+                      <h4 className="font-bold text-xs text-slate-800">
+                        {incident.alert_name}
+                      </h4>
+                      <div className="text-slate-400 text-[9px] mt-0.5 flex items-center space-x-1">
+                        <span>Target:</span>
+                        <span className="font-mono text-slate-700 font-semibold">{incident.service}</span>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center justify-between pt-2 border-t border-slate-100 text-[9px] text-slate-400">
+                      <span className="flex items-center space-x-1">
+                        <Clock className="h-3.5 w-3.5" />
+                        <span>{formatTime(incident.created_at)}</span>
+                      </span>
+                      {incident.resolution_time_seconds && (
+                        <span className="font-mono font-bold text-slate-600">MTTR: {incident.resolution_time_seconds.toFixed(0)}s</span>
+                      )}
+                    </div>
                   </div>
+                );
+              })
+            )}
+          </div>
+        </div>
 
-                  {/* Confidence & Risk */}
-                  {(selectedIncident.confidence !== undefined && selectedIncident.confidence !== null) && (
-                    <div className="pt-2 border-t border-slate-100 flex items-center gap-3 justify-between">
-                      <div className="flex items-center gap-1.5 flex-grow max-w-[70%]">
-                        <Target className="h-3.5 w-3.5 text-blue-600 shrink-0" />
-                        <span className="text-slate-400 text-[9px] uppercase tracking-wider font-semibold shrink-0">Confidence</span>
-                        <div className="flex-grow bg-slate-100 h-1.5 rounded-full overflow-hidden">
-                          <div
-                            className={`h-full rounded-full transition-all duration-500 ${
-                              selectedIncident.confidence >= 80 ? "bg-emerald-500" :
-                              selectedIncident.confidence >= 50 ? "bg-amber-500" : "bg-red-500"
+        {/* Panel 3: SRE Agent Console Terminal */}
+        <div className="w-full lg:w-[40%] flex flex-col h-[500px] lg:h-full overflow-hidden bg-slate-50/10">
+          <div className="p-4 bg-slate-50 border-b border-slate-100 flex items-center justify-between">
+            <h4 className="text-xs font-bold uppercase tracking-wider text-slate-500 flex items-center space-x-1.5">
+              <Terminal className="h-4 w-4 text-slate-600" />
+              <span>SRE Agent Log & Reports</span>
+            </h4>
+          </div>
+
+          {selectedIncident ? (
+            <div className="flex-1 flex flex-col p-4 overflow-hidden space-y-3">
+              {/* Meta details dashboard inside Panel 3 */}
+              <div className="p-3 bg-white border border-slate-100 rounded-xl text-[10px] space-y-2.5 flex flex-col shadow-[0_4px_12px_rgba(0,0,0,0.01)] shrink-0">
+                <div className="grid grid-cols-2 gap-1.5 text-slate-500 font-medium">
+                  <div>ID: <span className="font-mono font-bold text-slate-800">{selectedIncident.id}</span></div>
+                  <div>Status: <span className="font-bold text-slate-800">{selectedIncident.status}</span></div>
+                  <div>Target: <span className="font-mono font-bold text-slate-800">{selectedIncident.service}</span></div>
+                  {selectedIncident.resolution_time_seconds && (
+                    <div>MTTR: <span className="font-bold text-slate-800">{selectedIncident.resolution_time_seconds}s</span></div>
+                  )}
+                </div>
+
+                {/* Confidence & Risk */}
+                {(selectedIncident.confidence !== undefined && selectedIncident.confidence !== null) && (
+                  <div className="pt-2 border-t border-slate-100 flex items-center gap-3 justify-between">
+                    <div className="flex items-center gap-1.5 flex-grow max-w-[70%]">
+                      <Target className="h-3.5 w-3.5 text-blue-600 shrink-0" />
+                      <span className="text-slate-400 text-[9px] uppercase tracking-wider font-semibold shrink-0">Confidence</span>
+                      <div className="flex-grow bg-slate-100 h-1.5 rounded-full overflow-hidden">
+                        <div
+                          className={`h-full rounded-full transition-all duration-500 ${selectedIncident.confidence >= 80 ? "bg-emerald-500" :
+                            selectedIncident.confidence >= 50 ? "bg-amber-500" : "bg-red-500"
                             }`}
-                            style={{ width: `${Math.min(selectedIncident.confidence, 100)}%` }}
-                          ></div>
+                          style={{ width: `${Math.min(selectedIncident.confidence, 100)}%` }}
+                        ></div>
+                      </div>
+                      <span className="font-mono text-slate-800 font-bold text-[9px] shrink-0">{selectedIncident.confidence}%</span>
+                    </div>
+
+                    {selectedIncident.risk_level && (() => {
+                      const rc = getRiskColor(selectedIncident.risk_level);
+                      return (
+                        <div className={`flex items-center gap-0.5 px-2 py-0.5 rounded border ${rc.border} ${rc.bg} shrink-0`}>
+                          <Shield className={`h-3 w-3 ${rc.text}`} />
+                          <span className={`font-bold text-[8px] uppercase tracking-wider ${rc.text}`}>{selectedIncident.risk_level}</span>
                         </div>
-                        <span className="font-mono text-slate-800 font-bold text-[9px] shrink-0">{selectedIncident.confidence}%</span>
-                      </div>
+                      );
+                    })()}
+                  </div>
+                )}
 
-                      {selectedIncident.risk_level && (() => {
-                        const rc = getRiskColor(selectedIncident.risk_level);
-                        return (
-                          <div className={`flex items-center gap-0.5 px-2 py-0.5 rounded border ${rc.border} ${rc.bg} shrink-0`}>
-                            <Shield className={`h-3 w-3 ${rc.text}`} />
-                            <span className={`font-bold text-[8px] uppercase tracking-wider ${rc.text}`}>{selectedIncident.risk_level}</span>
+                {/* Evidence & Blast Radius */}
+                {(() => {
+                  const evidenceItems = parseJsonField(selectedIncident.evidence);
+                  const affectedItems = parseJsonField(selectedIncident.affected_services);
+                  return (evidenceItems.length > 0 || affectedItems.length > 0) ? (
+                    <div className="pt-2 border-t border-slate-100 flex flex-col space-y-1.5">
+                      {evidenceItems.length > 0 && (
+                        <div>
+                          <div className="text-[8px] font-bold uppercase tracking-wider text-slate-400 mb-0.5 flex items-center gap-1">
+                            <Zap className="h-3 w-3 text-amber-500" />
+                            Evidence
                           </div>
-                        );
-                      })()}
-                    </div>
-                  )}
-
-                  {/* Evidence & Blast Radius */}
-                  {(() => {
-                    const evidenceItems = parseJsonField(selectedIncident.evidence);
-                    const affectedItems = parseJsonField(selectedIncident.affected_services);
-                    return (evidenceItems.length > 0 || affectedItems.length > 0) ? (
-                      <div className="pt-2 border-t border-slate-100 flex flex-col space-y-1.5">
-                        {evidenceItems.length > 0 && (
-                          <div>
-                            <div className="text-[8px] font-bold uppercase tracking-wider text-slate-400 mb-0.5 flex items-center gap-1">
-                              <Zap className="h-3 w-3 text-amber-500" />
-                              Evidence
-                            </div>
-                            <ul className="space-y-0.5 pl-0.5">
-                              {evidenceItems.map((e, i) => (
-                                <li key={i} className="text-[9px] text-slate-600 pl-3 relative before:content-['▸'] before:absolute before:left-0 before:text-blue-500">{e}</li>
-                              ))}
-                            </ul>
+                          <ul className="space-y-0.5 pl-0.5">
+                            {evidenceItems.map((e, i) => (
+                              <li key={i} className="text-[9px] text-slate-600 pl-3 relative before:content-['▸'] before:absolute before:left-0 before:text-blue-500">{e}</li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
+                      {affectedItems.length > 0 && (
+                        <div>
+                          <div className="text-[8px] font-bold uppercase tracking-wider text-slate-400 mb-0.5">
+                            Blast Radius
                           </div>
-                        )}
-                        {affectedItems.length > 0 && (
-                          <div>
-                            <div className="text-[8px] font-bold uppercase tracking-wider text-slate-400 mb-0.5">
-                              Blast Radius
-                            </div>
-                            <div className="flex flex-wrap gap-1">
-                              {affectedItems.map((svc, i) => (
-                                <span key={i} className="px-1.5 py-0.5 text-[8px] font-mono rounded border border-slate-100 bg-slate-50 text-slate-600 shadow-sm">{svc}</span>
-                              ))}
-                            </div>
+                          <div className="flex flex-wrap gap-1">
+                            {affectedItems.map((svc, i) => (
+                              <span key={i} className="px-1.5 py-0.5 text-[8px] font-mono rounded border border-slate-100 bg-slate-50 text-slate-600 shadow-sm">{svc}</span>
+                            ))}
                           </div>
-                        )}
-                      </div>
-                    ) : null;
-                  })()}
-
-                  {selectedIncident.root_cause && (
-                    <div className="pt-2 border-t border-slate-100 text-[10px] text-slate-600">
-                      <strong className="text-slate-400 uppercase tracking-wider text-[8px] block mb-0.5">Root Cause</strong>
-                      {selectedIncident.root_cause}
+                        </div>
+                      )}
                     </div>
-                  )}
-                </div>
+                  ) : null;
+                })()}
 
-                {/* Console Output */}
-                <div ref={consoleRef} className="flex-grow bg-[#0c1020] rounded-xl p-4 font-mono text-[11px] overflow-y-auto flex flex-col space-y-2 relative shadow-inner">
-                  {logs.length === 0 ? (
-                    <div className="h-full flex items-center justify-center text-slate-500 text-center italic">
-                      Idle... select an incident to stream agent timeline.
-                    </div>
-                  ) : (
-                    logs.map((log) => (
-                      <div key={log.id} className="leading-relaxed whitespace-pre-wrap">
-                        <span className="text-slate-500 mr-2 text-[9px]">{formatTime(log.timestamp)}</span>
-                        <span className={getLogStyle(log.level)}>{log.message}</span>
-                      </div>
-                    ))
-                  )}
-                </div>
-
-                {/* Markdown post-mortem downloader */}
-                {selectedIncident.resolution_action && (
-                  <div className="pt-2 border-t border-slate-200/60 flex justify-between items-center shrink-0">
-                    <span className="text-[10px] text-emerald-600 font-bold flex items-center space-x-1">
-                      <CheckCircle className="h-3.5 w-3.5" />
-                      <span>Report Compiled</span>
-                    </span>
-                    <button
-                      onClick={() => {
-                        const element = document.createElement("a");
-                        const file = new Blob([selectedIncident.resolution_action || ""], {type: 'text/markdown'});
-                        element.href = URL.createObjectURL(file);
-                        element.download = `PostMortem-${selectedIncident.id}.md`;
-                        document.body.appendChild(element);
-                        element.click();
-                        document.body.removeChild(element);
-                      }}
-                      className="flex items-center space-x-1 px-3 py-1.5 text-[10px] font-bold rounded-full bg-blue-600 hover:bg-blue-700 text-white shadow-md shadow-blue-500/10 active:scale-95 transition-all cursor-pointer"
-                    >
-                      <Download className="h-3 w-3" />
-                      <span>Download Report</span>
-                    </button>
+                {selectedIncident.root_cause && (
+                  <div className="pt-2 border-t border-slate-100 text-[10px] text-slate-600">
+                    <strong className="text-slate-400 uppercase tracking-wider text-[8px] block mb-0.5">Root Cause</strong>
+                    {selectedIncident.root_cause}
                   </div>
                 )}
               </div>
-            ) : (
-              <div className="flex-grow flex flex-col items-center justify-center text-center text-slate-400 space-y-3 p-10">
-                <Terminal className="h-9 w-9 text-slate-300 animate-pulse" />
-                <div>
-                  <h3 className="font-bold text-xs text-slate-500">Terminal Offline</h3>
-                  <p className="text-[10px] max-w-[200px] mt-1 text-slate-400">Select an incident from the feed to connect into SRE logs.</p>
-                </div>
+
+              {/* Console Output */}
+              <div ref={consoleRef} className="flex-grow bg-[#0c1020] rounded-xl p-4 font-mono text-[11px] overflow-y-auto flex flex-col space-y-2 relative shadow-inner">
+                {logs.length === 0 ? (
+                  <div className="h-full flex items-center justify-center text-slate-500 text-center italic">
+                    Idle... select an incident to stream agent timeline.
+                  </div>
+                ) : (
+                  logs.map((log) => (
+                    <div key={log.id} className="leading-relaxed whitespace-pre-wrap">
+                      <span className="text-slate-500 mr-2 text-[9px]">{formatTime(log.timestamp)}</span>
+                      <span className={getLogStyle(log.level)}>{log.message}</span>
+                    </div>
+                  ))
+                )}
               </div>
-            )}
-          </div>
 
+              {/* Markdown post-mortem downloader */}
+              {selectedIncident.resolution_action && (
+                <div className="pt-2 border-t border-slate-200/60 flex justify-between items-center shrink-0">
+                  <span className="text-[10px] text-emerald-600 font-bold flex items-center space-x-1">
+                    <CheckCircle className="h-3.5 w-3.5" />
+                    <span>Report Compiled</span>
+                  </span>
+                  <button
+                    onClick={() => {
+                      const element = document.createElement("a");
+                      const file = new Blob([selectedIncident.resolution_action || ""], { type: 'text/markdown' });
+                      element.href = URL.createObjectURL(file);
+                      element.download = `PostMortem-${selectedIncident.id}.md`;
+                      document.body.appendChild(element);
+                      element.click();
+                      document.body.removeChild(element);
+                    }}
+                    className="flex items-center space-x-1 px-3 py-1.5 text-[10px] font-bold rounded-full bg-blue-600 hover:bg-blue-700 text-white shadow-md shadow-blue-500/10 active:scale-95 transition-all cursor-pointer"
+                  >
+                    <Download className="h-3 w-3" />
+                    <span>Download Report</span>
+                  </button>
+                </div>
+              )}
+            </div>
+          ) : (
+            <div className="flex-grow flex flex-col items-center justify-center text-center text-slate-400 space-y-3 p-10">
+              <Terminal className="h-9 w-9 text-slate-300 animate-pulse" />
+              <div>
+                <h3 className="font-bold text-xs text-slate-500">Terminal Offline</h3>
+                <p className="text-[10px] max-w-[200px] mt-1 text-slate-400">Select an incident from the feed to connect into SRE logs.</p>
+              </div>
+            </div>
+          )}
         </div>
-
-      </main>
-
-      {/* Footer */}
-      <footer className="bg-white border-t border-slate-100 px-8 py-6 text-center text-xs text-slate-400 mt-auto font-sans">
-        <div className="flex flex-col sm:flex-row items-center justify-between max-w-[1400px] mx-auto w-full gap-4">
-          <div>SentinelOps Agent SRE Framework | Local LLM Development</div>
-          <div className="flex items-center gap-2">
-            <span>Version 1.0.0</span>
-            <span className="text-slate-300">|</span>
-            <span>Ollama: qwen2.5:3b</span>
-          </div>
-        </div>
-      </footer>
-
-      {/* Floating Rocket scroll-to-top button */}
-      <div 
-        onClick={scrollToTop}
-        className="fixed bottom-6 right-6 w-11 h-11 bg-blue-600 hover:bg-blue-700 text-white rounded-xl shadow-lg transition-all duration-300 flex items-center justify-center cursor-pointer hover:shadow-xl active:scale-90 z-50 group"
-      >
-        <Rocket className="h-5 w-5 transform -rotate-45 group-hover:-translate-y-0.5 transition-transform" />
       </div>
+    </main>
 
+    {/* Footer */}
+    <footer className="bg-white border-t border-slate-100 px-8 py-6 text-center text-xs text-slate-400 mt-auto font-sans">
+      <div className="flex flex-col sm:flex-row items-center justify-between max-w-[1400px] mx-auto w-full gap-4">
+        <div>SentinelOps Agent SRE Framework | Local LLM Development</div>
+        <div className="flex items-center gap-2">
+          <span>Version 1.0.0</span>
+          <span className="text-slate-300">|</span>
+          <span>Ollama: qwen2.5:3b</span>
+        </div>
+      </div>
+    </footer>
+
+    {/* Floating Rocket scroll-to-top button */}
+    <div
+      onClick={scrollToTop}
+      className="fixed bottom-6 right-6 w-11 h-11 bg-blue-600 hover:bg-blue-700 text-white rounded-xl shadow-lg transition-all duration-300 flex items-center justify-center cursor-pointer hover:shadow-xl active:scale-90 z-50 group"
+    >
+      <Rocket className="h-5 w-5 transform -rotate-45 group-hover:-translate-y-0.5 transition-transform" />
     </div>
+
+  </div>
   );
 }

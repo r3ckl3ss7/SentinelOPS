@@ -24,7 +24,9 @@ from app.sre_system_prompt import (
     SRE_SYSTEM_PROMPT, 
     build_investigation_prompt,
     AUDITOR_SYSTEM_PROMPT,
-    build_audit_report_prompt
+    build_audit_report_prompt,
+    GOVERNANCE_SYSTEM_PROMPT,
+    build_governance_prompt
 )
 
 # Logger setup
@@ -57,7 +59,10 @@ RUNBOOK_TO_ACTION = {
     "CLEAR_STUCK_JOBS": "RESTART",        # Clearing faults = effective restart
     "RESTART_DEPENDENCY": "RESTART",      # Same mechanism for MVP
     "NO_ACTION": "NO_ACTION",
+    "DESTROY_AND_REBUILD_DATABASE": "DESTROY",
 }
+
+MAX_TRIES = 3
 
 # Graph State Schema
 class AgentState(TypedDict):
@@ -81,6 +86,9 @@ class AgentState(TypedDict):
     analyzer_logs: Optional[str]
     analyzer_metrics: Optional[str]
     analyzer_health: Optional[str]
+    # Safety and Governance fields
+    governance_approved: Optional[bool]
+    governance_reason: Optional[str]
 
 # Database logging helpers
 def log_step(incident_id: str, message: str, level: str = "INFO"):
@@ -131,6 +139,86 @@ def update_incident_status(incident_id: str, status: str, root_cause: str = None
     finally:
         db.close()
 
+def send_admin_failure_email(incident_id: str, service: str, alert_name: str, reason: str,
+                             action: str = None, confidence: int = None, risk_level: str = None):
+    """
+    Simulates sending an email notification to the administrator and SRE leads when an incident fails.
+    Also creates a Markdown file artifact in the workspace.
+    """
+    db = SessionLocal()
+    consecutive_failures = 0
+    try:
+        incidents = db.query(Incident).filter(
+            Incident.service == service,
+            Incident.alert_name == alert_name
+        ).order_by(Incident.created_at.desc()).all()
+        
+        for inc in incidents:
+            if inc.status == "FAILED":
+                consecutive_failures += 1
+            elif inc.status == "RESOLVED":
+                break
+    except Exception as e:
+        logger.error(f"Failed to query consecutive failures for email: {e}")
+        consecutive_failures = 1
+    finally:
+        db.close()
+
+    email_recipient = "admin@company.com"
+    email_subject = f"[SentinelOps Outage Alert] Incident {incident_id} Resolution FAILED"
+    
+    action_str = action if action else "Unknown Action"
+    risk_str = risk_level if risk_level else "Unknown Risk"
+    conf_str = f"{confidence}%" if isinstance(confidence, int) else str(confidence)
+    
+    email_body = (
+        f"Dear Administrator,\n\n"
+        f"The SRE Agent has failed to resolve the following incident.\n\n"
+        f"Incident ID: {incident_id}\n"
+        f"Service: {service}\n"
+        f"Trigger Alert: {alert_name}\n"
+        f"Proposed Remediation: {action_str}\n"
+        f"RCA Confidence: {conf_str}\n"
+        f"Risk Level: {risk_str}\n"
+        f"Failure Reason: {reason}\n"
+        f"Consecutive Failures: {consecutive_failures}/3\n\n"
+    )
+    if consecutive_failures >= 3:
+        email_body += "WARNING: Maximum retry limit (3) reached. Automatic self-healing is now suspended. Immediate manual intervention is required!\n"
+    else:
+        email_body += "The SRE Agent will retry remediation in the next monitoring cycle.\n"
+
+    log_step(incident_id, f"[Auditor] Simulating failure email notification to {email_recipient}...", "INFO")
+
+    # Write Markdown failure notification artifact to the workspace
+    try:
+        artifact_content = (
+            f"# SentinelOps Admin Alert - Incident FAILED - {incident_id}\n\n"
+            f"> [!CAUTION]\n"
+            f"> **Automated remediation failed. Manual intervention may be required.**\n\n"
+            f"## Incident Details\n"
+            f"* **Incident ID:** `{incident_id}`\n"
+            f"* **Affected Service:** `{service}`\n"
+            f"* **Fired Alert:** `{alert_name}`\n"
+            f"* **RCA Confidence:** `{conf_str}`\n"
+            f"* **Risk Level:** `{risk_str}`\n"
+            f"* **Consecutive Failures:** `{consecutive_failures} of 3`\n\n"
+            f"## Status Update\n"
+            f"{'**CRITICAL:** Maximum retry limit reached. Automatic remediation suspended.' if consecutive_failures >= 3 else 'The agent will attempt self-healing again.'}\n\n"
+            f"## Simulated Notification\n"
+            f"```text\n"
+            f"To: {email_recipient}\n"
+            f"Subject: {email_subject}\n\n"
+            f"{email_body}\n"
+            f"```\n"
+        )
+        filepath = f"c:/Coding/Web/Hackathons/SentinalOPS/admin_notification_{incident_id}.md"
+        with open(filepath, "w", encoding="utf-8") as art_f:
+            art_f.write(artifact_content)
+        log_step(incident_id, f"[Auditor] Created admin notification artifact at '{filepath}'", "INFO")
+    except Exception as ex:
+        log_step(incident_id, f"[Auditor] Failed to write admin notification artifact: {str(ex)}", "WARNING")
+
 # JSON Parsing Helpers
 def _try_parse_json(text: str) -> dict | None:
     try:
@@ -148,7 +236,29 @@ def _try_parse_json(text: str) -> dict | None:
     return None
 
 def _heuristic_diagnosis(alert_name: str, service: str) -> dict:
-    if "HighMemoryUsage" in alert_name:
+    if "DatabaseCorruptionAlert" in alert_name:
+        return {
+            "root_cause": "Database integrity check failed. Block corruption detected in postgres storage files.",
+            "confidence": 50,
+            "severity": "critical",
+            "risk_level": "CRITICAL",
+            "evidence": ["Checksum validation failed on table users", "Disk block 0x4f32 invalid read"],
+            "affected_services": ["database-service", "order-service", "payment-service"],
+            "recommended_runbook": "DESTROY_AND_REBUILD_DATABASE",
+            "reasoning_summary": "Block corruption requires rebuilding database and running recovery from latest snapshot."
+        }
+    elif "LowPriorityWarning" in alert_name:
+        return {
+            "root_cause": "Routine health check latency warning.",
+            "confidence": 95,
+            "severity": "warning",
+            "risk_level": "LOW",
+            "evidence": ["Latency briefly touched 250ms"],
+            "affected_services": [service],
+            "recommended_runbook": "RESTART_SERVICE",
+            "reasoning_summary": "Routine warning. Restarting service to restore normal telemetry."
+        }
+    elif "HighMemoryUsage" in alert_name:
         return {
             "root_cause": "Detected out-of-memory conditions in service logs and memory metrics above threshold.",
             "confidence": 75,
@@ -162,7 +272,7 @@ def _heuristic_diagnosis(alert_name: str, service: str) -> dict:
     elif "HighCpuUsage" in alert_name:
         return {
             "root_cause": "CPU utilization spiked beyond 80% threshold indicating a busy-loop or runaway process.",
-            "confidence": 70,
+            "confidence": 90,
             "severity": "warning",
             "risk_level": "MEDIUM",
             "evidence": ["CPU usage ratio exceeds 0.80", "Sustained high utilization"],
@@ -226,17 +336,32 @@ def incident_commander_node(state: AgentState) -> AgentState:
             "next_agent": "diagnostics_agent"
         }
         
-    # 3. Remediation check
+    # 3. Governance & Safety check
     remediation_choice = state.get("remediation_choice")
     needs_remediation = remediation_choice is not None and remediation_choice != "NO_ACTION"
+    governance_approved = state.get("governance_approved")
     has_remediation = state.get("remediation_result") is not None
     
-    if needs_remediation and not has_remediation:
-        log_step(incident_id, f"[Incident Commander] Diagnostics completed: root cause is '{state.get('root_cause')}' ({state.get('confidence', 0)}% confidence). Recommended runbook: {remediation_choice}.", "INFO")
-        log_step(incident_id, f"[Incident Commander] Action: Routing to Remediation Executor to deploy plan: {remediation_choice}.", "AGENT_THOUGHT")
+    if needs_remediation and governance_approved is None:
+        log_step(incident_id, "[Incident Commander] Diagnostics completed. Routing to Governance & Safety Agent for risk evaluation.", "AGENT_THOUGHT")
+        return {
+            **state,
+            "next_agent": "governance_safety"
+        }
+        
+    if needs_remediation and governance_approved is True and not has_remediation:
+        log_step(incident_id, f"[Incident Commander] Governance approved. Routing to Remediation Executor to deploy plan: {remediation_choice}.", "AGENT_THOUGHT")
         return {
             **state,
             "next_agent": "remediation_executor"
+        }
+        
+    if needs_remediation and governance_approved is False and not has_remediation:
+        log_step(incident_id, "[Incident Commander] Governance safety check suspended / flagged for approval. Routing directly to Auditor to freeze SRE execution.", "INFO")
+        return {
+            **state,
+            "next_agent": "auditor",
+            "status": "PENDING_APPROVAL"
         }
         
     # 4. Verification/Audit check
@@ -245,6 +370,8 @@ def incident_commander_node(state: AgentState) -> AgentState:
         if not needs_remediation:
             log_step(incident_id, f"[Incident Commander] Diagnostics completed: root cause is '{state.get('root_cause')}' ({state.get('confidence', 0)}% confidence). Recommended runbook: NO_ACTION.", "INFO")
             log_step(incident_id, "[Incident Commander] Action: Bypassing remediation (NO_ACTION). Routing directly to Auditor.", "AGENT_THOUGHT")
+        elif governance_approved is False:
+            log_step(incident_id, "[Incident Commander] Bypassing remediation due to governance suspension. Routing to Auditor.", "AGENT_THOUGHT")
         else:
             log_step(incident_id, "[Incident Commander] Remediation successfully deployed. Routing control to Auditor for recovery verification.", "AGENT_THOUGHT")
             
@@ -255,6 +382,14 @@ def incident_commander_node(state: AgentState) -> AgentState:
         
     # 5. Final report check (already done by auditor)
     success = state.get("verification_success", False)
+    if governance_approved is False:
+        log_step(incident_id, f"[Incident Commander] Incident workflow paused at PENDING_APPROVAL. Waiting for administrative action.", "INFO")
+        return {
+            **state,
+            "next_agent": "end",
+            "status": "PENDING_APPROVAL"
+        }
+        
     status_val = "RESOLVED" if success else "FAILED"
     log_step(incident_id, f"[Incident Commander] SRE verification & post-mortem complete. Closing incident lifecycle as {status_val}.", "INFO")
     return {
@@ -437,13 +572,52 @@ def auditor_node(state: AgentState) -> AgentState:
     alert_name = state["alert_name"]
     root_cause = state["root_cause"]
     action = state["remediation_choice"]
-    remediation_result = state["remediation_result"]
+    remediation_result = state.get("remediation_result") or "No action taken — halted by safety policy."
     confidence = state.get("confidence", "N/A")
     risk_level = state.get("risk_level", "N/A")
     evidence = state.get("evidence", [])
     affected_services = state.get("affected_services", [])
     reasoning_summary = state.get("reasoning_summary", "")
+    governance_approved = state.get("governance_approved")
     
+    if governance_approved is False:
+        log_step(incident_id, f"[Auditor] Governance safety check suspended execution. Bypassing health checks & metrics checks.", "INFO")
+        resolution_time = 0.0
+        success = False
+        report_content = (
+            f"# SRE Incident Post-Mortem and Audit Report - {incident_id}\n\n"
+            f"## Executive Summary\n"
+            f"An incident was triggered on **{service}** due to **{alert_name}** alert.\n"
+            f"The SRE safety system determined this action is **{risk_level} RISK** and suspended automatic execution.\n\n"
+            f"## Safety Policy Details\n"
+            f"* **Governance Status:** PENDING HUMAN APPROVAL\n"
+            f"* **Proposed Remediation:** {action}\n"
+            f"* **Governance Reason:** {state.get('governance_reason')}\n\n"
+            f"## Root Cause Analysis\n"
+            f"* **Root Cause:** {root_cause}\n"
+            f"* **Confidence:** {confidence}%\n"
+            f"* **Affected Services:** {', '.join(affected_services)}\n"
+        )
+        db = SessionLocal()
+        try:
+            incident = db.query(Incident).filter(Incident.id == incident_id).first()
+            if incident:
+                incident.status = "PENDING_APPROVAL"
+                incident.resolution_action = report_content
+                db.commit()
+        except Exception as e:
+            logger.error(f"Auditor failed writing safety report to DB: {str(e)}")
+        finally:
+            db.close()
+            
+        log_step(incident_id, f"[Auditor] Safety report compiled. Workflow suspended pending manual approval.", "INFO")
+        return {
+            **state,
+            "verification_success": False,
+            "incident_report": report_content,
+            "next_agent": "incident_commander"
+        }
+        
     log_step(incident_id, "[Auditor] Verification loop initialized. Sleeping 5 seconds for service convergence...", "INFO")
     update_incident_status(incident_id, "VERIFYING")
     
@@ -505,6 +679,17 @@ def auditor_node(state: AgentState) -> AgentState:
         logger.error(f"Auditor failed writing status info to DB: {str(e)}")
     finally:
         db.close()
+        
+    if not success:
+        send_admin_failure_email(
+            incident_id=incident_id,
+            service=service,
+            alert_name=alert_name,
+            reason="Service verification failed after remediation. Health check returned unhealthy status code.",
+            action=action,
+            confidence=confidence,
+            risk_level=risk_level
+        )
         
     log_step(incident_id, "[Auditor] Action: Compiling final Markdown Post-Mortem Report", "INFO")
     evidence_str = "\n".join(f"  - {e}" for e in evidence) if evidence else "  - No specific evidence collected"
@@ -575,6 +760,265 @@ def auditor_node(state: AgentState) -> AgentState:
     }
 
 
+def governance_safety_agent_node(state: AgentState) -> AgentState:
+    """
+    Governance & Safety Agent Node:
+    - Evaluates proposed remediation action based on risk level, confidence, impacted services, and service type.
+    - Classifies the proposed action into LOW, MEDIUM, HIGH, or CRITICAL risk.
+    - Decides whether it can execute automatically or requires human approval.
+    """
+    incident_id = state["incident_id"]
+    service = state["service"]
+    root_cause = state.get("root_cause") or "Unknown"
+    confidence = state.get("confidence") or 100
+    remediation_choice = state.get("remediation_choice") or "RESTART"
+    affected_services = state.get("affected_services") or [service]
+    alert_name = state.get("alert_name") or "UnknownAlert"
+    logs = state.get("analyzer_logs") or "No logs available"
+    metrics = state.get("analyzer_metrics") or "No metrics available"
+
+    log_step(incident_id, f"[Governance & Safety Agent] Evaluating remediation action '{remediation_choice}' for service '{service}'.", "INFO")
+
+    # Sensitive systems and database checks
+    is_db_op = any(kw in service.lower() for kw in ["db", "database", "postgres", "sql"])
+    is_auth_service = any(kw in service.lower() for kw in ["auth", "login", "jwt", "session"])
+    is_user_service = "user-service" in service.lower() or service.lower() == "user"
+    is_payment_service = "payment-service" in service.lower() or service.lower() == "payment"
+    is_security_sensitive = any(kw in service.lower() for kw in ["vault", "secret", "security"])
+    is_sensitive = is_db_op or is_auth_service or is_user_service or is_payment_service or is_security_sensitive
+
+    critical_triggers = []
+    # Database operations, Data deletion, Schema changes, Rebuild actions, DESTROY action
+    is_destructive_action = remediation_choice in ["DESTROY", "DESTROY_AND_REBUILD_DATABASE"]
+    if is_db_op and is_destructive_action:
+        critical_triggers.append("Database operations / Destructive action on DB")
+    elif is_destructive_action:
+        critical_triggers.append("Remediation action is destructive / rebuild / destroy")
+    elif is_db_op and any(kw in remediation_choice.lower() for kw in ["rebuild", "schema", "delete"]):
+        critical_triggers.append("Destructive schema/rebuild database operation")
+        
+    # More than 3 services affected
+    if len(affected_services) > 3:
+        critical_triggers.append(f"More than 3 services affected: {len(affected_services)} services")
+        
+    # Potential customer data loss
+    if is_db_op and is_destructive_action:
+        critical_triggers.append("Potential customer data loss (database destroy/rebuild)")
+        
+    # Potential security incident
+    if is_security_sensitive and "leak" in alert_name.lower():
+        critical_triggers.append("Potential security incident on sensitive system")
+        
+    # Unknown remediation outcome
+    if remediation_choice not in ["RESTART", "ROLLBACK", "SCALE", "NO_ACTION", "DESTROY"]:
+        critical_triggers.append(f"Unknown remediation outcome for action: {remediation_choice}")
+
+    high_triggers = []
+    # Confidence < 85%
+    if confidence < 85:
+        high_triggers.append(f"Diagnosis confidence below 85% ({confidence}%)")
+        
+    # Root cause uncertain
+    if "unable to determine" in root_cause.lower() or "uncertain" in root_cause.lower() or confidence < 85:
+        high_triggers.append("Root cause is uncertain")
+        
+    # More than 1 service affected
+    if len(affected_services) > 1:
+        high_triggers.append(f"Blast radius: {len(affected_services)} services affected")
+        
+    # Action = ROLLBACK
+    if remediation_choice in ["ROLLBACK", "ROLLBACK_DEPLOYMENT"]:
+        high_triggers.append("Remediation action is ROLLBACK")
+        
+    # Authentication service involved
+    if is_auth_service:
+        high_triggers.append(f"Authentication service involved: '{service}'")
+        
+    # User service involved
+    if is_user_service:
+        high_triggers.append(f"User service involved: '{service}'")
+        
+    # Payment service involved
+    if is_payment_service:
+        high_triggers.append(f"Payment service involved: '{service}'")
+        
+    # External API dependency involved
+    if "external" in service.lower() or "api-gateway" in service.lower() or "gateway" in service.lower():
+        high_triggers.append(f"External API dependency / Gateway service involved: '{service}'")
+        
+    # Data consistency risk exists
+    if "consistency" in root_cause.lower() or "integrity" in root_cause.lower() or "corruption" in root_cause.lower():
+        high_triggers.append("Data consistency / integrity risk exists")
+
+    medium_triggers = []
+    # Confidence between 85 and 95
+    if 85 <= confidence < 95:
+        medium_triggers.append(f"Diagnosis confidence is between 85% and 95% ({confidence}%)")
+        
+    # Action modifies configuration
+    if "config" in remediation_choice.lower() or "modify" in remediation_choice.lower():
+        medium_triggers.append("Remediation action modifies configuration")
+        
+    # Scale up/down operations
+    if remediation_choice in ["SCALE", "SCALE_SERVICE"]:
+        medium_triggers.append("Remediation action is SCALE")
+        
+    # Cache reset
+    if "cache" in root_cause.lower() or "clear" in remediation_choice.lower() or remediation_choice == "CLEAR_STUCK_JOBS":
+        medium_triggers.append("Remediation action is cache reset / job clearing")
+
+    # Determine risk level based on triggers (highest priority first)
+    if critical_triggers:
+        risk_level = "CRITICAL"
+        blocking_reasons = critical_triggers
+    elif high_triggers:
+        risk_level = "HIGH"
+        blocking_reasons = high_triggers
+    elif medium_triggers or confidence < 95 or len(affected_services) > 1 or remediation_choice not in ["RESTART", "NO_ACTION"] or is_sensitive:
+        risk_level = "MEDIUM"
+        blocking_reasons = medium_triggers if medium_triggers else ["General medium risk (does not meet strict LOW criteria)"]
+    else:
+        risk_level = "LOW"
+        blocking_reasons = []
+
+    # Heuristic approval decision based on conservative policy
+    approved = (
+        risk_level == "LOW" and
+        confidence >= 95 and
+        len(affected_services) == 1 and
+        remediation_choice in ["RESTART", "NO_ACTION"] and
+        not is_sensitive
+    )
+    reason_str = f"Auto-approved: proposed action '{remediation_choice}' poses {risk_level} risk." if approved else f"Halted: proposed action requires human review."
+
+    # Perform LLM validation if available
+    try:
+        if llm:
+            gov_prompt = build_governance_prompt(
+                incident_id=incident_id,
+                alert_name=alert_name,
+                service=service,
+                confidence=confidence,
+                root_cause=root_cause,
+                action=remediation_choice,
+                affected_services=affected_services,
+                logs=logs,
+                metrics=metrics
+            )
+            response = llm.invoke([
+                SystemMessage(content=GOVERNANCE_SYSTEM_PROMPT),
+                HumanMessage(content=gov_prompt)
+            ])
+            content = response.content.strip()
+            log_step(incident_id, f"[Governance & Safety Agent] LLM review output:\n{content}", "AGENT_THOUGHT")
+            parsed = _try_parse_json(content)
+            if parsed and "risk_level" in parsed:
+                risk_level = parsed.get("risk_level", risk_level).upper()
+                approved = parsed.get("governance_approved", False)
+                # Enforce safety constraints regardless of LLM errors
+                if risk_level != "LOW":
+                    approved = False
+                reason_str = parsed.get("governance_reason", reason_str)
+                log_step(incident_id, "[Governance & Safety Agent] Successfully parsed LLM safety assessment.", "INFO")
+            else:
+                # LLM output could not be parsed, fallback to heuristic approval
+                approved = (
+                    risk_level == "LOW" and
+                    confidence >= 95 and
+                    len(affected_services) == 1 and
+                    remediation_choice in ["RESTART", "NO_ACTION"] and
+                    not is_sensitive
+                )
+                reason_str = f"Halted: proposed action '{remediation_choice}' poses {risk_level} risk. "
+                if blocking_reasons:
+                    reason_str += "Triggers: " + "; ".join(blocking_reasons)
+                else:
+                    reason_str += "Base runbook classification."
+        else:
+            raise Exception("LLM unavailable")
+    except Exception as e:
+        logger.warning(f"Governance LLM call failed or unavailable ({str(e)}). Using heuristic safety assessment.")
+        approved = (
+            risk_level == "LOW" and
+            confidence >= 95 and
+            len(affected_services) == 1 and
+            remediation_choice in ["RESTART", "NO_ACTION"] and
+            not is_sensitive
+        )
+        reason_str = f"Halted: proposed action '{remediation_choice}' poses {risk_level} risk. "
+        if blocking_reasons:
+            reason_str += "Triggers: " + "; ".join(blocking_reasons)
+        else:
+            reason_str += "Base runbook classification."
+
+    log_step(incident_id, f"[Governance & Safety Agent] Risk classification: {risk_level}. Approved: {approved}.", "INFO")
+    if not approved:
+        log_step(incident_id, f"[Governance & Safety Agent] Reason: {reason_str}", "WARNING")
+
+        # Simulate sending email notification
+        email_recipient = "sre-leads@company.com"
+        email_subject = f"[SentinelOps Safety Alert] Approval Required for Incident {incident_id}"
+        email_body = (
+            f"Dear SRE Lead,\n\n"
+            f"An automated SRE agent has proposed a recovery action that requires human confirmation.\n\n"
+            f"Incident ID: {incident_id}\n"
+            f"Service: {service}\n"
+            f"Trigger Alert: {alert_name}\n"
+            f"Proposed Remediation: {remediation_choice}\n"
+            f"Blast Radius: {', '.join(affected_services)}\n"
+            f"Confidence: {confidence}%\n"
+            f"Risk Level: {risk_level}\n"
+            f"Safety Warning: {reason_str}\n\n"
+            f"Please approve or deny this action in the SentinelOps console.\n"
+        )
+        log_step(incident_id, f"[Governance & Safety Agent] Simulating email notification to {email_recipient}...", "INFO")
+        
+        # Write Markdown approval request artifact to the workspace
+        try:
+            artifact_content = (
+                f"# SentinelOps Approval Request - {incident_id}\n\n"
+                f"> [!IMPORTANT]\n"
+                f"> **Action approval is required before execution.**\n\n"
+                f"## Incident Details\n"
+                f"* **Incident ID:** `{incident_id}`\n"
+                f"* **Affected Service:** `{service}`\n"
+                f"* **Fired Alert:** `{alert_name}`\n"
+                f"* **RCA Confidence:** `{confidence}%`\n"
+                f"* **Impacted Services (Blast Radius):** `{', '.join(affected_services)}`\n\n"
+                f"## Risk Assessment & Safety Node Review\n"
+                f"* **Assessed Risk Level:** `{risk_level}`\n"
+                f"* **Proposed Remediation:** `{remediation_choice}`\n"
+                f"* **Reason for Review:** {reason_str}\n\n"
+                f"## Simulated Notification\n"
+                f"```text\n"
+                f"To: {email_recipient}\n"
+                f"Subject: {email_subject}\n\n"
+                f"{email_body}\n"
+                f"```\n"
+            )
+            filepath = f"c:/Coding/Web/Hackathons/SentinalOPS/approval_request_{incident_id}.md"
+            with open(filepath, "w", encoding="utf-8") as art_f:
+                art_f.write(artifact_content)
+            log_step(incident_id, f"[Governance & Safety Agent] Created approval request artifact at '{filepath}'", "INFO")
+        except Exception as ex:
+            log_step(incident_id, f"[Governance & Safety Agent] Failed to write approval request artifact: {str(ex)}", "WARNING")
+
+    # Update database risk level
+    update_incident_status(
+        incident_id, 
+        status="PENDING_APPROVAL" if not approved else "INVESTIGATING",
+        risk_level=risk_level
+    )
+
+    return {
+        **state,
+        "governance_approved": approved,
+        "governance_reason": reason_str,
+        "risk_level": risk_level,
+        "next_agent": "incident_commander"
+    }
+
+
 # ── LANGGRAPH ROUTING LOGIC ───────────────────────────────────────────────
 
 def route_commander(state: AgentState):
@@ -583,6 +1027,8 @@ def route_commander(state: AgentState):
         return "metrics_log_analyzer"
     elif next_step == "diagnostics_agent":
         return "diagnostics_agent"
+    elif next_step == "governance_safety":
+        return "governance_safety"
     elif next_step == "remediation_executor":
         return "remediation_executor"
     elif next_step == "auditor":
@@ -599,6 +1045,7 @@ workflow = StateGraph(AgentState)
 workflow.add_node("incident_commander", incident_commander_node)
 workflow.add_node("metrics_log_analyzer", metrics_log_analyzer_node)
 workflow.add_node("diagnostics_agent", diagnostics_agent_node)
+workflow.add_node("governance_safety", governance_safety_agent_node)
 workflow.add_node("remediation_executor", remediation_executor_node)
 workflow.add_node("auditor", auditor_node)
 
@@ -608,6 +1055,7 @@ workflow.set_entry_point("incident_commander")
 # Register edges back to Incident Commander hub
 workflow.add_edge("metrics_log_analyzer", "incident_commander")
 workflow.add_edge("diagnostics_agent", "incident_commander")
+workflow.add_edge("governance_safety", "incident_commander")
 workflow.add_edge("remediation_executor", "incident_commander")
 workflow.add_edge("auditor", "incident_commander")
 
@@ -618,6 +1066,7 @@ workflow.add_conditional_edges(
     {
         "metrics_log_analyzer": "metrics_log_analyzer",
         "diagnostics_agent": "diagnostics_agent",
+        "governance_safety": "governance_safety",
         "remediation_executor": "remediation_executor",
         "auditor": "auditor",
         END: END
@@ -626,3 +1075,4 @@ workflow.add_conditional_edges(
 
 # Compile SRE agent app
 agent_app = workflow.compile()
+

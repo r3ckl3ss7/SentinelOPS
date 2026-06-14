@@ -192,11 +192,12 @@ def restart_service(service_name: str) -> str:
     logger.info(f"Tool execution: restart_service for {service_name}")
     
     # First, try to clear faults via API to simulate fresh start
-    for base_url in [f"http://{service_name}:8000", f"http://localhost:{LOCAL_PORTS.get(service_name, 8000)}"]:
-        try:
-            requests.post(f"{base_url}/fault/clear", timeout=1.0)
-        except Exception:
-            pass
+    if "notification" not in service_name:
+        for base_url in [f"http://{service_name}:8000", f"http://localhost:{LOCAL_PORTS.get(service_name, 8000)}"]:
+            try:
+                requests.post(f"{base_url}/fault/clear", timeout=1.0)
+            except Exception:
+                pass
             
     container = get_container_by_name(service_name)
     if container:
