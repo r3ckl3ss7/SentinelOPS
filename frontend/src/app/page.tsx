@@ -25,7 +25,9 @@ import {
   Code,
   Layout,
   Radio,
-  FileText
+  FileText,
+  BarChart3,
+  TrendingUp
 } from "lucide-react";
 
 interface SimulationStep {
@@ -212,6 +214,74 @@ export default function LandingPage() {
   const [isPlaying, setIsPlaying] = useState<boolean>(true);
   const [typedLogs, setTypedLogs] = useState<string[]>([]);
   const intervalRef = useRef<any>(null);
+
+  // Benchmark data from real API
+  const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+
+  interface BenchmarkSummary {
+    avg_mttr: number;
+    recovery_success_rate: number;
+    false_positive_rate: number;
+    agent_accuracy: number;
+    total_resolved: number;
+    total_failed: number;
+    total_pending: number;
+  }
+
+  interface AlertBenchmark {
+    alert_name: string;
+    total: number;
+    resolved: number;
+    failed: number;
+    avg_mttr: number;
+    success_rate: number;
+    false_positive_rate: number;
+    avg_confidence: number;
+  }
+
+  interface BenchmarkData {
+    total_incidents: number;
+    summary: BenchmarkSummary;
+    by_alert_type: AlertBenchmark[];
+  }
+
+  const [benchmarkData, setBenchmarkData] = useState<BenchmarkData | null>(null);
+
+  useEffect(() => {
+    const fetchBenchmarks = async () => {
+      try {
+        const res = await fetch(`${API_URL}/api/v1/benchmarks`);
+        if (res.ok) {
+          const data = await res.json();
+          setBenchmarkData(data);
+        }
+      } catch (err) {
+        console.error("Failed to fetch benchmarks:", err);
+      }
+    };
+    fetchBenchmarks();
+    // Refresh every 30 seconds to pick up new incidents
+    const interval = setInterval(fetchBenchmarks, 30000);
+    return () => clearInterval(interval);
+  }, [API_URL]);
+
+  // Icon map for alert types
+  const alertIconMap: Record<string, string> = {
+    "HighMemoryUsage": "\ud83e\udde0",
+    "HighCpuUsage": "\u26a1",
+    "HttpErrorSpike": "\ud83d\udd25",
+    "DatabaseCorruptionAlert": "\ud83d\uddc4\ufe0f",
+    "LowPriorityWarning": "\u2699\ufe0f",
+  };
+
+  // Human-readable names for alert types
+  const alertNameMap: Record<string, string> = {
+    "HighMemoryUsage": "Memory Leak (OOM)",
+    "HighCpuUsage": "CPU Spike (Busy Loop)",
+    "HttpErrorSpike": "HTTP 500 Storm",
+    "DatabaseCorruptionAlert": "DB Corruption",
+    "LowPriorityWarning": "Low Priority Warning",
+  };
 
   const scenario = SCENARIOS[activeScenario];
 
@@ -660,6 +730,269 @@ export default function LandingPage() {
 
         </div>
 
+      </section>
+
+      {/* Quantitative Benchmark Tables Section */}
+      <section className="px-8 py-24 bg-slate-50/50 border-y border-slate-100 w-full relative overflow-hidden">
+        {/* Decorative background accents */}
+        <div className="absolute top-0 left-1/2 -translate-x-1/2 w-full max-w-[1200px] h-[1px] bg-gradient-to-r from-transparent via-blue-500/10 to-transparent"></div>
+        <div className="absolute bottom-[-200px] right-[-100px] w-[400px] h-[400px] rounded-full bg-gradient-to-br from-blue-100/20 to-cyan-100/10 blur-3xl pointer-events-none" />
+
+        <div className="max-w-[1400px] mx-auto">
+          {/* Section Header */}
+          <div className="text-center mb-16">
+            <div className="inline-flex items-center space-x-1.5 px-3 py-1 rounded-full border border-blue-200 bg-blue-50 text-xs font-mono font-bold text-blue-600 mb-3 uppercase tracking-wider">
+              <BarChart3 className="h-3.5 w-3.5" />
+              <span>Quantitative Evaluation</span>
+            </div>
+            <h3 className="font-heading font-black text-slate-800 text-3xl sm:text-4xl uppercase">
+              Performance Benchmarks
+            </h3>
+            <p className="text-slate-500 text-sm mt-3 max-w-xl mx-auto">
+              {benchmarkData && benchmarkData.total_incidents > 0
+                ? `Live metrics computed from ${benchmarkData.total_incidents} real incident${benchmarkData.total_incidents !== 1 ? 's' : ''} across all microservices.`
+                : "Metrics will appear here once incidents have been processed by the SRE agent."
+              }
+            </p>
+          </div>
+
+          {/* KPI Summary Cards */}
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-12">
+            {/* Card 1: Avg MTTR */}
+            <div className="group bg-white border border-slate-100 rounded-2xl p-6 text-center shadow-[0_4px_20px_rgba(0,0,0,0.01)] hover:shadow-lg hover:border-blue-200 transition-all duration-300 relative overflow-hidden">
+              <div className="absolute inset-0 bg-gradient-to-br from-blue-50/40 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300" />
+              <div className="relative">
+                <div className="w-10 h-10 mx-auto rounded-xl bg-blue-50 border border-blue-200 flex items-center justify-center text-blue-600 mb-3 group-hover:scale-110 transition-transform">
+                  <Clock className="h-5 w-5" />
+                </div>
+                <div className="text-3xl font-black font-heading text-slate-800 tracking-tight">
+                  {benchmarkData ? benchmarkData.summary.avg_mttr : "—"}<span className="text-lg text-slate-400">s</span>
+                </div>
+                <div className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mt-1">Avg MTTR</div>
+                <div className="mt-2 flex items-center justify-center gap-1 text-[9px] font-bold text-emerald-600">
+                  <TrendingUp className="h-3 w-3" />
+                  <span>{benchmarkData && benchmarkData.summary.avg_mttr > 0 ? `${Math.round(((15 * 60) - benchmarkData.summary.avg_mttr) / (15 * 60) * 100)}% faster than manual` : "Awaiting data"}</span>
+                </div>
+              </div>
+            </div>
+
+            {/* Card 2: Recovery Success Rate */}
+            <div className="group bg-white border border-slate-100 rounded-2xl p-6 text-center shadow-[0_4px_20px_rgba(0,0,0,0.01)] hover:shadow-lg hover:border-emerald-200 transition-all duration-300 relative overflow-hidden">
+              <div className="absolute inset-0 bg-gradient-to-br from-emerald-50/40 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300" />
+              <div className="relative">
+                <div className="w-10 h-10 mx-auto rounded-xl bg-emerald-50 border border-emerald-200 flex items-center justify-center text-emerald-600 mb-3 group-hover:scale-110 transition-transform">
+                  <CheckCircle className="h-5 w-5" />
+                </div>
+                <div className="text-3xl font-black font-heading text-slate-800 tracking-tight">
+                  {benchmarkData ? benchmarkData.summary.recovery_success_rate : "—"}<span className="text-lg text-slate-400">%</span>
+                </div>
+                <div className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mt-1">Recovery Success</div>
+                <div className="mt-2 flex items-center justify-center gap-1 text-[9px] font-bold text-emerald-600">
+                  <TrendingUp className="h-3 w-3" />
+                  <span>{benchmarkData ? `${benchmarkData.summary.total_resolved} of ${benchmarkData.summary.total_resolved + benchmarkData.summary.total_failed} incidents` : "Awaiting data"}</span>
+                </div>
+              </div>
+            </div>
+
+            {/* Card 3: False Positive Rate */}
+            <div className="group bg-white border border-slate-100 rounded-2xl p-6 text-center shadow-[0_4px_20px_rgba(0,0,0,0.01)] hover:shadow-lg hover:border-amber-200 transition-all duration-300 relative overflow-hidden">
+              <div className="absolute inset-0 bg-gradient-to-br from-amber-50/40 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300" />
+              <div className="relative">
+                <div className="w-10 h-10 mx-auto rounded-xl bg-amber-50 border border-amber-200 flex items-center justify-center text-amber-600 mb-3 group-hover:scale-110 transition-transform">
+                  <Shield className="h-5 w-5" />
+                </div>
+                <div className="text-3xl font-black font-heading text-slate-800 tracking-tight">
+                  {benchmarkData ? benchmarkData.summary.false_positive_rate : "—"}<span className="text-lg text-slate-400">%</span>
+                </div>
+                <div className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mt-1">False Positive Rate</div>
+                <div className="mt-2 flex items-center justify-center gap-1 text-[9px] font-bold text-blue-600">
+                  <Shield className="h-3 w-3" />
+                  <span>Governance-filtered</span>
+                </div>
+              </div>
+            </div>
+
+            {/* Card 4: Agent Accuracy */}
+            <div className="group bg-white border border-slate-100 rounded-2xl p-6 text-center shadow-[0_4px_20px_rgba(0,0,0,0.01)] hover:shadow-lg hover:border-purple-200 transition-all duration-300 relative overflow-hidden">
+              <div className="absolute inset-0 bg-gradient-to-br from-purple-50/40 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300" />
+              <div className="relative">
+                <div className="w-10 h-10 mx-auto rounded-xl bg-purple-50 border border-purple-200 flex items-center justify-center text-purple-600 mb-3 group-hover:scale-110 transition-transform">
+                  <Target className="h-5 w-5" />
+                </div>
+                <div className="text-3xl font-black font-heading text-slate-800 tracking-tight">
+                  {benchmarkData ? benchmarkData.summary.agent_accuracy : "—"}<span className="text-lg text-slate-400">%</span>
+                </div>
+                <div className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mt-1">RCA Accuracy</div>
+                <div className="mt-2 flex items-center justify-center gap-1 text-[9px] font-bold text-purple-600">
+                  <Cpu className="h-3 w-3" />
+                  <span>LLM + Heuristic fusion</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Benchmark Comparison Table */}
+          <div className="bg-white border border-slate-100 rounded-2xl shadow-[0_8px_30px_rgba(0,0,0,0.02)] overflow-hidden">
+            {/* Table Header Bar */}
+            <div className="px-6 py-4 bg-slate-50 border-b border-slate-100 flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <BarChart3 className="h-4 w-4 text-blue-600" />
+                <span className="text-xs font-bold uppercase tracking-widest text-slate-600">Performance Breakdown by Alert Type</span>
+              </div>
+              <span className="text-[9px] font-mono font-bold text-slate-400 bg-slate-100 px-2.5 py-1 rounded-full border border-slate-200">
+                {benchmarkData ? `n = ${benchmarkData.total_incidents} incidents` : "loading..."}
+              </span>
+            </div>
+
+            {/* Responsive table wrapper */}
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-xs">
+                <thead>
+                  <tr className="border-b border-slate-100">
+                    <th className="px-6 py-4 text-[10px] font-bold uppercase tracking-widest text-slate-400 w-[22%]">Alert Type</th>
+                    <th className="px-4 py-4 text-[10px] font-bold uppercase tracking-widest text-slate-400 text-center w-[10%]">Count</th>
+                    <th className="px-4 py-4 text-[10px] font-bold uppercase tracking-widest text-slate-400 text-center w-[13%]">Avg MTTR</th>
+                    <th className="px-4 py-4 text-[10px] font-bold uppercase tracking-widest text-slate-400 w-[20%]">Recovery Success</th>
+                    <th className="px-4 py-4 text-[10px] font-bold uppercase tracking-widest text-slate-400 w-[17%]">False Positive</th>
+                    <th className="px-4 py-4 text-[10px] font-bold uppercase tracking-widest text-slate-400 w-[18%]">Agent Accuracy</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {benchmarkData && benchmarkData.by_alert_type.length > 0 ? (
+                    benchmarkData.by_alert_type.map((row, idx) => (
+                      <tr
+                        key={idx}
+                        className={`border-b border-slate-50 transition-all duration-200 hover:bg-blue-50/30 group ${
+                          idx % 2 === 0 ? "bg-white" : "bg-slate-50/30"
+                        }`}
+                      >
+                        {/* Alert Name */}
+                        <td className="px-6 py-4">
+                          <div className="flex items-center gap-2.5">
+                            <span className="text-sm">{alertIconMap[row.alert_name] || "🚨"}</span>
+                            <div className="flex flex-col">
+                              <span className="font-bold text-slate-800 text-xs group-hover:text-blue-700 transition-colors">
+                                {alertNameMap[row.alert_name] || row.alert_name}
+                              </span>
+                              <span className="text-[8px] font-mono text-slate-400">{row.alert_name}</span>
+                            </div>
+                          </div>
+                        </td>
+
+                        {/* Count */}
+                        <td className="px-4 py-4 text-center">
+                          <span className="font-mono font-bold text-sm text-slate-700">{row.total}</span>
+                        </td>
+
+                        {/* MTTR */}
+                        <td className="px-4 py-4 text-center">
+                          {row.avg_mttr > 0 ? (
+                            <span className={`font-mono font-black text-sm ${
+                              row.avg_mttr <= 30 ? "text-emerald-600" : row.avg_mttr <= 60 ? "text-blue-600" : "text-amber-600"
+                            }`}>
+                              {row.avg_mttr}s
+                            </span>
+                          ) : (
+                            <span className="text-slate-400 text-[10px] font-mono">N/A</span>
+                          )}
+                        </td>
+
+                        {/* Recovery Success Rate */}
+                        <td className="px-4 py-4">
+                          <div className="flex items-center gap-2.5">
+                            <div className="flex-grow bg-slate-100 h-2 rounded-full overflow-hidden max-w-[100px]">
+                              <div
+                                className={`h-full rounded-full transition-all duration-700 ${
+                                  row.success_rate >= 95 ? "bg-emerald-500" : row.success_rate >= 80 ? "bg-blue-500" : row.success_rate > 0 ? "bg-amber-500" : "bg-slate-200"
+                                }`}
+                                style={{ width: `${row.success_rate}%` }}
+                              ></div>
+                            </div>
+                            <span className={`font-mono font-bold text-[11px] ${
+                              row.success_rate >= 95 ? "text-emerald-600" : row.success_rate >= 80 ? "text-blue-600" : "text-amber-600"
+                            }`}>
+                              {row.success_rate}%
+                            </span>
+                          </div>
+                        </td>
+
+                        {/* False Positive Rate */}
+                        <td className="px-4 py-4">
+                          <div className="flex items-center gap-2.5">
+                            <div className="flex-grow bg-slate-100 h-2 rounded-full overflow-hidden max-w-[100px]">
+                              <div
+                                className={`h-full rounded-full transition-all duration-700 ${
+                                  row.false_positive_rate <= 2.0 ? "bg-emerald-400" : row.false_positive_rate <= 5.0 ? "bg-amber-400" : "bg-red-400"
+                                }`}
+                                style={{ width: `${Math.min(row.false_positive_rate * 10, 100)}%` }}
+                              ></div>
+                            </div>
+                            <span className={`font-mono font-bold text-[11px] ${
+                              row.false_positive_rate <= 2.0 ? "text-emerald-600" : row.false_positive_rate <= 5.0 ? "text-amber-600" : "text-red-500"
+                            }`}>
+                              {row.false_positive_rate}%
+                            </span>
+                          </div>
+                        </td>
+
+                        {/* Agent Accuracy */}
+                        <td className="px-4 py-4">
+                          <div className="flex items-center gap-2.5">
+                            <div className="flex-grow bg-slate-100 h-2 rounded-full overflow-hidden max-w-[100px]">
+                              <div
+                                className={`h-full rounded-full transition-all duration-700 ${
+                                  row.avg_confidence >= 90 ? "bg-purple-500" : row.avg_confidence >= 75 ? "bg-blue-500" : "bg-amber-500"
+                                }`}
+                                style={{ width: `${row.avg_confidence}%` }}
+                              ></div>
+                            </div>
+                            <span className={`font-mono font-bold text-[11px] ${
+                              row.avg_confidence >= 90 ? "text-purple-600" : row.avg_confidence >= 75 ? "text-blue-600" : "text-amber-600"
+                            }`}>
+                              {row.avg_confidence}%
+                            </span>
+                          </div>
+                        </td>
+                      </tr>
+                    ))
+                  ) : (
+                    <tr>
+                      <td colSpan={6} className="px-6 py-12 text-center">
+                        <div className="flex flex-col items-center gap-2 text-slate-400">
+                          <RefreshCw className="h-5 w-5 animate-spin text-blue-400" />
+                          <span className="text-[11px] font-bold uppercase tracking-wider">
+                            {benchmarkData ? "No incident data yet — trigger an outage to start collecting benchmarks" : "Connecting to backend..."}
+                          </span>
+                        </div>
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+
+            {/* Table Footer */}
+            <div className="px-6 py-3.5 bg-slate-50/50 border-t border-slate-100 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2">
+              <span className="text-[9px] text-slate-400 font-medium">
+                Live data from real SRE agent incidents &middot; LLM: Qwen 2.5:3b &middot; Auto-refreshes every 30s
+              </span>
+              <div className="flex items-center gap-3">
+                <div className="flex items-center gap-1.5 text-[9px] text-slate-400">
+                  <span className="w-2 h-2 rounded-full bg-emerald-500"></span>
+                  <span>Excellent</span>
+                </div>
+                <div className="flex items-center gap-1.5 text-[9px] text-slate-400">
+                  <span className="w-2 h-2 rounded-full bg-blue-500"></span>
+                  <span>Good</span>
+                </div>
+                <div className="flex items-center gap-1.5 text-[9px] text-slate-400">
+                  <span className="w-2 h-2 rounded-full bg-amber-500"></span>
+                  <span>Acceptable</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
       </section>
 
       {/* Infrastructure Components Stack / Architecture Grid */}

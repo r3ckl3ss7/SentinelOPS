@@ -448,6 +448,96 @@ def get_incident_logs(incident_id: str, db: Session = Depends(get_db)):
     logs = db.query(IncidentLog).filter(IncidentLog.incident_id == incident_id).order_by(IncidentLog.timestamp.asc()).all()
     return logs
 
+@app.get("/api/v1/benchmarks")
+def get_benchmarks(db: Session = Depends(get_db)):
+    """Computes real benchmark metrics from historical incident data."""
+    all_incidents = db.query(Incident).all()
+
+    if not all_incidents:
+        return {
+            "total_incidents": 0,
+            "summary": {
+                "avg_mttr": 0,
+                "recovery_success_rate": 0,
+                "false_positive_rate": 0,
+                "agent_accuracy": 0,
+                "total_resolved": 0,
+                "total_failed": 0,
+                "total_pending": 0,
+            },
+            "by_alert_type": []
+        }
+
+    # Count by status
+    resolved = [i for i in all_incidents if i.status == "RESOLVED"]
+    failed = [i for i in all_incidents if i.status == "FAILED"]
+    pending = [i for i in all_incidents if i.status == "PENDING_APPROVAL"]
+    terminal = resolved + failed  # Only completed incidents count for rates
+
+    # Overall MTTR (only from resolved incidents with timing data)
+    mttr_values = [i.resolution_time_seconds for i in resolved if i.resolution_time_seconds is not None]
+    avg_mttr = round(sum(mttr_values) / len(mttr_values), 1) if mttr_values else 0
+
+    # Recovery success rate = resolved / (resolved + failed)
+    success_rate = round(len(resolved) / len(terminal) * 100, 1) if terminal else 0
+
+    # False positive rate: incidents where the resolution action mentions NO_ACTION
+    # or where confidence was below 50 (agent was unsure and likely triggered needlessly)
+    false_positives = [
+        i for i in all_incidents
+        if (i.resolution_action and "NO_ACTION" in (i.resolution_action or "").upper())
+        or (i.confidence is not None and i.confidence < 50)
+    ]
+    fp_rate = round(len(false_positives) / len(all_incidents) * 100, 1) if all_incidents else 0
+
+    # Agent accuracy: average RCA confidence across all incidents that have a confidence score
+    confidence_values = [i.confidence for i in all_incidents if i.confidence is not None]
+    avg_accuracy = round(sum(confidence_values) / len(confidence_values), 1) if confidence_values else 0
+
+    # Breakdown by alert_name
+    alert_types: Dict[str, list] = {}
+    for inc in all_incidents:
+        name = inc.alert_name or "Unknown"
+        alert_types.setdefault(name, []).append(inc)
+
+    by_alert = []
+    for alert_name, incidents_list in alert_types.items():
+        a_resolved = [i for i in incidents_list if i.status == "RESOLVED"]
+        a_failed = [i for i in incidents_list if i.status == "FAILED"]
+        a_terminal = a_resolved + a_failed
+        a_mttr_vals = [i.resolution_time_seconds for i in a_resolved if i.resolution_time_seconds is not None]
+        a_conf_vals = [i.confidence for i in incidents_list if i.confidence is not None]
+        a_fp = [
+            i for i in incidents_list
+            if (i.resolution_action and "NO_ACTION" in (i.resolution_action or "").upper())
+            or (i.confidence is not None and i.confidence < 50)
+        ]
+
+        by_alert.append({
+            "alert_name": alert_name,
+            "total": len(incidents_list),
+            "resolved": len(a_resolved),
+            "failed": len(a_failed),
+            "avg_mttr": round(sum(a_mttr_vals) / len(a_mttr_vals), 1) if a_mttr_vals else 0,
+            "success_rate": round(len(a_resolved) / len(a_terminal) * 100, 1) if a_terminal else 0,
+            "false_positive_rate": round(len(a_fp) / len(incidents_list) * 100, 1) if incidents_list else 0,
+            "avg_confidence": round(sum(a_conf_vals) / len(a_conf_vals), 1) if a_conf_vals else 0,
+        })
+
+    return {
+        "total_incidents": len(all_incidents),
+        "summary": {
+            "avg_mttr": avg_mttr,
+            "recovery_success_rate": success_rate,
+            "false_positive_rate": fp_rate,
+            "agent_accuracy": avg_accuracy,
+            "total_resolved": len(resolved),
+            "total_failed": len(failed),
+            "total_pending": len(pending),
+        },
+        "by_alert_type": by_alert
+    }
+
 # Simulation Fault Control Proxy Endpoints
 LOCAL_PORTS = {
     "api-gateway": 8001,

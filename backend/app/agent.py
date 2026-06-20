@@ -356,7 +356,7 @@ def incident_commander_node(state: AgentState) -> AgentState:
             "next_agent": "remediation_executor"
         }
         
-    if needs_remediation and governance_approved is False and not has_remediation:
+    if needs_remediation and governance_approved is False and not has_remediation and state.get("verification_success") is None:
         log_step(incident_id, "[Incident Commander] Governance safety check suspended / flagged for approval. Routing directly to Auditor to freeze SRE execution.", "INFO")
         return {
             **state,
