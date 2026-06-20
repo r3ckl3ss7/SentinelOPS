@@ -144,9 +144,17 @@ def _health_monitor_loop():
 
                     # ── Check health ─────────────────────────────────
                     health_ok = False
+                    active_fault = None
                     try:
                         health_resp = requests.get(f"{url}/health", timeout=0.8)
                         health_ok = health_resp.status_code == 200
+                        if not health_ok:
+                            try:
+                                detail = health_resp.json().get("detail", "")
+                                if ":" in detail:
+                                    active_fault = detail.split(":")[0].strip()
+                            except Exception:
+                                pass
                     except Exception:
                         pass
 
@@ -158,8 +166,27 @@ def _health_monitor_loop():
                         alert_name = "HighCpuUsage"
                         severity = "warning"
                     elif not health_ok:
-                        alert_name = "HttpErrorSpike"
-                        severity = "critical"
+                        if active_fault == "DependencyFailure":
+                            alert_name = "DependencyFailure"
+                            severity = "critical"
+                        elif active_fault == "DatabaseSaturation":
+                            alert_name = "DatabaseSaturation"
+                            severity = "critical"
+                        elif active_fault == "NetworkPartition":
+                            alert_name = "NetworkPartition"
+                            severity = "critical"
+                        elif active_fault == "CascadingFailure":
+                            alert_name = "CascadingFailure"
+                            severity = "critical"
+                        elif active_fault == "ConfigurationDrift":
+                            alert_name = "ConfigurationDrift"
+                            severity = "warning"
+                        elif active_fault == "CertificateExpiration":
+                            alert_name = "CertificateExpiration"
+                            severity = "critical"
+                        else:
+                            alert_name = "HttpErrorSpike"
+                            severity = "critical"
                     else:
                         continue  # service is healthy, move on
 

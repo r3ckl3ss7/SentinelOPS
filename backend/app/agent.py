@@ -56,8 +56,8 @@ RUNBOOK_TO_ACTION = {
     "RESTART_SERVICE": "RESTART",
     "ROLLBACK_DEPLOYMENT": "ROLLBACK",
     "SCALE_SERVICE": "SCALE",
-    "CLEAR_STUCK_JOBS": "RESTART",        # Clearing faults = effective restart
-    "RESTART_DEPENDENCY": "RESTART",      # Same mechanism for MVP
+    "CLEAR_STUCK_JOBS": "CLEAR_STUCK_JOBS",
+    "RESTART_DEPENDENCY": "RESTART_DEPENDENCY",
     "NO_ACTION": "NO_ACTION",
     "DESTROY_AND_REBUILD_DATABASE": "DESTROY",
 }
@@ -290,6 +290,72 @@ def _heuristic_diagnosis(alert_name: str, service: str) -> dict:
             "affected_services": [service],
             "recommended_runbook": "ROLLBACK_DEPLOYMENT",
             "reasoning_summary": "Error spike suggests a deployment regression or dependency failure. Rolling back the deployment is the safest immediate action."
+        }
+    elif "DependencyFailure" in alert_name:
+        return {
+            "root_cause": "A downstream microservice dependency is down or failing to respond to API requests.",
+            "confidence": 90,
+            "severity": "critical",
+            "risk_level": "HIGH",
+            "evidence": ["Downstream connection refused", "HTTP 503 from dependency"],
+            "affected_services": [service, "payment-service"],
+            "recommended_runbook": "RESTART_DEPENDENCY",
+            "reasoning_summary": "Downstream service is unreachable. Restarting the failing downstream dependency to restore communication chain."
+        }
+    elif "DatabaseSaturation" in alert_name:
+        return {
+            "root_cause": "The database connection pool is exhausted or queries are locking resources.",
+            "confidence": 85,
+            "severity": "critical",
+            "risk_level": "CRITICAL",
+            "evidence": ["Connection pool checkouts timed out", "Database connection queue size > 50"],
+            "affected_services": [service, "database-service"],
+            "recommended_runbook": "CLEAR_STUCK_JOBS",
+            "reasoning_summary": "High DB connection pool utilization. Running CLEAR_STUCK_JOBS to release locks and terminate orphaned sessions."
+        }
+    elif "NetworkPartition" in alert_name:
+        return {
+            "root_cause": "Network connectivity is broken, isolating the service from dependencies.",
+            "confidence": 80,
+            "severity": "critical",
+            "risk_level": "HIGH",
+            "evidence": ["Network is unreachable", "Gateway timeout 504 on downstream calls"],
+            "affected_services": [service],
+            "recommended_runbook": "RESTART_SERVICE",
+            "reasoning_summary": "A network partition has isolated the service. Restarting the service to reset its networking state."
+        }
+    elif "CascadingFailure" in alert_name:
+        return {
+            "root_cause": "Domino effect where a downstream outage saturates the upstream request queue.",
+            "confidence": 85,
+            "severity": "critical",
+            "risk_level": "HIGH",
+            "evidence": ["Downstream returned 500", "Backpressure queue saturated", "High request latency"],
+            "affected_services": [service, "order-service", "payment-service"],
+            "recommended_runbook": "SCALE_SERVICE",
+            "reasoning_summary": "Cascading failure detected due to backpressure. Scaling the service to absorb queue saturation and buffer requests."
+        }
+    elif "ConfigurationDrift" in alert_name:
+        return {
+            "root_cause": "Service configuration parameters have drifted from the standard baseline.",
+            "confidence": 95,
+            "severity": "warning",
+            "risk_level": "HIGH",
+            "evidence": ["Configuration parameter drifted", "Invalid database host config"],
+            "affected_services": [service],
+            "recommended_runbook": "ROLLBACK_DEPLOYMENT",
+            "reasoning_summary": "Configuration drift detected. Rolling back the deployment to the last known stable configuration."
+        }
+    elif "CertificateExpiration" in alert_name:
+        return {
+            "root_cause": "The SSL/TLS certificate for the service has expired.",
+            "confidence": 95,
+            "severity": "critical",
+            "risk_level": "MEDIUM",
+            "evidence": ["SSL: CERTIFICATE_VERIFY_FAILED", "Certificate expired error"],
+            "affected_services": [service],
+            "recommended_runbook": "RESTART_SERVICE",
+            "reasoning_summary": "SSL certificate has expired. Restarting the service to reload the renewed certificate from disk."
         }
     else:
         return {
@@ -542,6 +608,24 @@ def remediation_executor_node(state: AgentState) -> AgentState:
     elif choice == "RESTART":
         log_step(incident_id, f"[Remediation Executor] Action: restart_service({service})", "AGENT_ACTION")
         result = restart_service.invoke({"service_name": service})
+    elif choice == "CLEAR_STUCK_JOBS":
+        log_step(incident_id, f"[Remediation Executor] Action: clear_stuck_jobs({service}) - resetting connection state", "AGENT_ACTION")
+        result = restart_service.invoke({"service_name": service})
+    elif choice == "RESTART_DEPENDENCY":
+        # Find downstream dependency to restart
+        dep_service = None
+        if service == "api-gateway":
+            dep_service = "order-service"
+        elif service == "order-service":
+            dep_service = "payment-service"
+        elif service == "payment-service":
+            dep_service = "notification-service"
+        
+        if not dep_service:
+            dep_service = service
+            
+        log_step(incident_id, f"[Remediation Executor] Action: restart_service({dep_service}) (Restarting failing dependency)", "AGENT_ACTION")
+        result = restart_service.invoke({"service_name": dep_service})
     elif choice == "ROLLBACK":
         log_step(incident_id, f"[Remediation Executor] Action: rollback_deployment({service})", "AGENT_ACTION")
         result = rollback_deployment.invoke({"service_name": service})

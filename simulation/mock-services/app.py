@@ -3,6 +3,7 @@ import time
 import uuid
 import threading
 import logging
+from datetime import datetime
 from fastapi import FastAPI, Response, HTTPException
 from prometheus_client import start_http_server, Counter, Histogram, Gauge, generate_latest, CONTENT_TYPE_LATEST
 import requests
@@ -42,6 +43,12 @@ CPU_GAUGE = Gauge(
 FAULT_MEMORY_LEAK = False
 FAULT_CPU_SPIKE = False
 FAULT_ERROR_SPIKE = False
+FAULT_DEPENDENCY_FAILURE = False
+FAULT_DB_SATURATION = False
+FAULT_NETWORK_PARTITION = False
+FAULT_CASCADING_FAILURE = False
+FAULT_CONFIG_DRIFT = False
+FAULT_CERT_EXPIRATION = False
 
 # Memory leak storage
 memory_leak_holder = []
@@ -79,7 +86,25 @@ def startup_event():
 def health():
     if FAULT_ERROR_SPIKE:
         REQUESTS.labels(method="GET", endpoint="/health", status="500").inc()
-        raise HTTPException(status_code=500, detail="Service Unhealthy (Error Spike Injected)")
+        raise HTTPException(status_code=500, detail="HttpErrorSpike: Service Unhealthy (Error Spike Injected)")
+    if FAULT_DEPENDENCY_FAILURE:
+        REQUESTS.labels(method="GET", endpoint="/health", status="500").inc()
+        raise HTTPException(status_code=500, detail="DependencyFailure: Connection failed to downstream service")
+    if FAULT_DB_SATURATION:
+        REQUESTS.labels(method="GET", endpoint="/health", status="500").inc()
+        raise HTTPException(status_code=500, detail="DatabaseSaturation: Connection checkout timed out after 3000ms")
+    if FAULT_NETWORK_PARTITION:
+        REQUESTS.labels(method="GET", endpoint="/health", status="500").inc()
+        raise HTTPException(status_code=500, detail="NetworkPartition: Network is unreachable on interface eth0")
+    if FAULT_CASCADING_FAILURE:
+        REQUESTS.labels(method="GET", endpoint="/health", status="500").inc()
+        raise HTTPException(status_code=500, detail="CascadingFailure: Backpressure queue saturated")
+    if FAULT_CONFIG_DRIFT:
+        REQUESTS.labels(method="GET", endpoint="/health", status="500").inc()
+        raise HTTPException(status_code=500, detail="ConfigurationDrift: Property database.max.connections has drifted to abc")
+    if FAULT_CERT_EXPIRATION:
+        REQUESTS.labels(method="GET", endpoint="/health", status="500").inc()
+        raise HTTPException(status_code=500, detail="CertificateExpiration: SSL: CERTIFICATE_VERIFY_FAILED certificate has expired")
     
     REQUESTS.labels(method="GET", endpoint="/health", status="200").inc()
     return {"status": "healthy", "service": SERVICE_NAME}
@@ -90,6 +115,10 @@ def metrics():
     if not FAULT_MEMORY_LEAK:
         # Normal baseline memory drift
         MEMORY_GAUGE.set(20 * 1024 * 1024 + (int(time.time()) % 100) * 1024)
+    else:
+        current_mem = len(memory_leak_holder) * 15 * 1024 * 1024 + 10 * 1024 * 1024
+        MEMORY_GAUGE.set(current_mem)
+        
     if not FAULT_CPU_SPIKE:
         CPU_GAUGE.set(0.05 + (int(time.time()) % 5) / 100.0)
     else:
@@ -101,10 +130,28 @@ def metrics():
 def handle_request():
     start_time = time.time()
     
-    # 1. Error Spike Check
+    # Check fault states
     if FAULT_ERROR_SPIKE:
         REQUESTS.labels(method="GET", endpoint="/", status="500").inc()
-        raise HTTPException(status_code=500, detail=f"Internal Server Error in {SERVICE_NAME}")
+        raise HTTPException(status_code=500, detail=f"HttpErrorSpike: Internal Server Error in {SERVICE_NAME}")
+    if FAULT_DEPENDENCY_FAILURE:
+        REQUESTS.labels(method="GET", endpoint="/", status="503").inc()
+        raise HTTPException(status_code=503, detail=f"DependencyFailure: Downstream service connection failed")
+    if FAULT_DB_SATURATION:
+        REQUESTS.labels(method="GET", endpoint="/", status="500").inc()
+        raise HTTPException(status_code=500, detail=f"DatabaseSaturation: Connection checkout timed out after 3000ms")
+    if FAULT_NETWORK_PARTITION:
+        REQUESTS.labels(method="GET", endpoint="/", status="500").inc()
+        raise HTTPException(status_code=500, detail=f"NetworkPartition: Network is unreachable on interface eth0")
+    if FAULT_CASCADING_FAILURE:
+        REQUESTS.labels(method="GET", endpoint="/", status="500").inc()
+        raise HTTPException(status_code=500, detail=f"CascadingFailure: Backpressure queue saturated")
+    if FAULT_CONFIG_DRIFT:
+        REQUESTS.labels(method="GET", endpoint="/", status="500").inc()
+        raise HTTPException(status_code=500, detail=f"ConfigurationDrift: Property database.max.connections has drifted to abc")
+    if FAULT_CERT_EXPIRATION:
+        REQUESTS.labels(method="GET", endpoint="/", status="500").inc()
+        raise HTTPException(status_code=500, detail=f"CertificateExpiration: SSL: CERTIFICATE_VERIFY_FAILED certificate has expired")
 
     # 2. Call Downstream Services
     downstream_results = {}
@@ -164,13 +211,61 @@ def inject_error_spike():
     logger.warning(f"Injected ERROR SPIKE into {SERVICE_NAME}")
     return {"message": f"Error spike injected into {SERVICE_NAME}"}
 
+@app.post("/fault/dependency-failure")
+def inject_dependency_failure():
+    global FAULT_DEPENDENCY_FAILURE
+    FAULT_DEPENDENCY_FAILURE = True
+    logger.warning(f"Injected DEPENDENCY FAILURE into {SERVICE_NAME}")
+    return {"message": f"Dependency failure injected into {SERVICE_NAME}"}
+
+@app.post("/fault/db-saturation")
+def inject_db_saturation():
+    global FAULT_DB_SATURATION
+    FAULT_DB_SATURATION = True
+    logger.warning(f"Injected DATABASE SATURATION into {SERVICE_NAME}")
+    return {"message": f"Database saturation injected into {SERVICE_NAME}"}
+
+@app.post("/fault/network-partition")
+def inject_network_partition():
+    global FAULT_NETWORK_PARTITION
+    FAULT_NETWORK_PARTITION = True
+    logger.warning(f"Injected NETWORK PARTITION into {SERVICE_NAME}")
+    return {"message": f"Network partition injected into {SERVICE_NAME}"}
+
+@app.post("/fault/cascading-failure")
+def inject_cascading_failure():
+    global FAULT_CASCADING_FAILURE
+    FAULT_CASCADING_FAILURE = True
+    logger.warning(f"Injected CASCADING FAILURE into {SERVICE_NAME}")
+    return {"message": f"Cascading failure injected into {SERVICE_NAME}"}
+
+@app.post("/fault/config-drift")
+def inject_config_drift():
+    global FAULT_CONFIG_DRIFT
+    FAULT_CONFIG_DRIFT = True
+    logger.warning(f"Injected CONFIGURATION DRIFT into {SERVICE_NAME}")
+    return {"message": f"Configuration drift injected into {SERVICE_NAME}"}
+
+@app.post("/fault/cert-expiration")
+def inject_cert_expiration():
+    global FAULT_CERT_EXPIRATION
+    FAULT_CERT_EXPIRATION = True
+    logger.warning(f"Injected CERTIFICATE EXPIRATION into {SERVICE_NAME}")
+    return {"message": f"Certificate expiration injected into {SERVICE_NAME}"}
+
 @app.post("/fault/clear")
 def clear_faults():
-    global FAULT_MEMORY_LEAK, FAULT_CPU_SPIKE, FAULT_ERROR_SPIKE, memory_leak_holder, stop_cpu_threads, cpu_threads
+    global FAULT_MEMORY_LEAK, FAULT_CPU_SPIKE, FAULT_ERROR_SPIKE, FAULT_DEPENDENCY_FAILURE, FAULT_DB_SATURATION, FAULT_NETWORK_PARTITION, FAULT_CASCADING_FAILURE, FAULT_CONFIG_DRIFT, FAULT_CERT_EXPIRATION, memory_leak_holder, stop_cpu_threads, cpu_threads
     logger.info(f"Clearing all faults for {SERVICE_NAME}")
     FAULT_MEMORY_LEAK = False
     FAULT_CPU_SPIKE = False
     FAULT_ERROR_SPIKE = False
+    FAULT_DEPENDENCY_FAILURE = False
+    FAULT_DB_SATURATION = False
+    FAULT_NETWORK_PARTITION = False
+    FAULT_CASCADING_FAILURE = False
+    FAULT_CONFIG_DRIFT = False
+    FAULT_CERT_EXPIRATION = False
     stop_cpu_threads = True
     
     # Wait for CPU threads to stop
@@ -186,6 +281,50 @@ def clear_faults():
     CPU_GAUGE.set(0.05)
     
     return {"message": f"Faults cleared for {SERVICE_NAME}"}
+
+@app.get("/logs")
+def get_logs():
+    lines = []
+    timestamp_base = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+    
+    # Baseline normal logs
+    lines.append(f"[INFO] {timestamp_base} - Starting request processing chain")
+    lines.append(f"[INFO] {timestamp_base} - Connection pool healthy: active=5, idle=15")
+    
+    if FAULT_MEMORY_LEAK:
+        lines.append(f"[WARNING] {timestamp_base} - JVM memory footprint approaching threshold")
+        lines.append(f"[ERROR] {timestamp_base} - java.lang.OutOfMemoryError: Java heap space")
+        lines.append(f"[ERROR] {timestamp_base} - Thread-15 fatal memory limit exceeded. Handlers terminating.")
+    elif FAULT_CPU_SPIKE:
+        lines.append(f"[WARNING] {timestamp_base} - CPU utilization crossed warning threshold (85%)")
+        lines.append(f"[WARNING] {timestamp_base} - High utilization in thread pool executor: busy-loop detected")
+        lines.append(f"[ERROR] {timestamp_base} - Process scheduler overloaded: CPU usage ratio=0.98")
+    elif FAULT_ERROR_SPIKE:
+        lines.append(f"[ERROR] {timestamp_base} - HTTP 500: Internal Server Error returned to gateway client")
+        lines.append(f"[ERROR] {timestamp_base} - Unexpected validation failure in controller payload parsing")
+    elif FAULT_DEPENDENCY_FAILURE:
+        lines.append(f"[ERROR] {timestamp_base} - Error contacting downstream dependency: Connection refused")
+        lines.append(f"[ERROR] {timestamp_base} - HTTP 503 Service Unavailable returned due to downstream outage")
+    elif FAULT_DB_SATURATION:
+        lines.append(f"[WARNING] {timestamp_base} - Database connection pool exhaustion warning")
+        lines.append(f"[ERROR] {timestamp_base} - TimeoutException: Connection checkout timed out after 3000ms")
+        lines.append(f"[ERROR] {timestamp_base} - Database saturated: active connections = 100, waiting = 45")
+    elif FAULT_NETWORK_PARTITION:
+        lines.append(f"[WARNING] {timestamp_base} - Socket timeout: connection to cluster peers dropped")
+        lines.append(f"[ERROR] {timestamp_base} - Network partition active: unable to reach target subnet")
+        lines.append(f"[ERROR] {timestamp_base} - OSError: Network is unreachable (routing table lookup failed)")
+    elif FAULT_CASCADING_FAILURE:
+        lines.append(f"[ERROR] {timestamp_base} - Downstream microservice failed with HTTP 500")
+        lines.append(f"[ERROR] {timestamp_base} - Cascading failure: backpressure queue full, rejecting incoming traffic")
+        lines.append(f"[ERROR] {timestamp_base} - RateLimiter: thread pool saturation, dropping request")
+    elif FAULT_CONFIG_DRIFT:
+        lines.append(f"[ERROR] {timestamp_base} - Configuration drift detected: parameter 'database.max.connections' holds drifted value 'abc'")
+        lines.append(f"[ERROR] {timestamp_base} - Failed to initialize client session due to drifted config properties")
+    elif FAULT_CERT_EXPIRATION:
+        lines.append(f"[ERROR] {timestamp_base} - SSL connection handshake failed: remote host closed connection")
+        lines.append(f"[ERROR] {timestamp_base} - SSLError: [SSL: CERTIFICATE_VERIFY_FAILED] certificate has expired (_ssl.c:1129)")
+        
+    return Response(content="\n".join(lines), media_type="text/plain")
 
 if __name__ == "__main__":
     import uvicorn

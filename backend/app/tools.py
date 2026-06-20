@@ -45,6 +45,17 @@ def get_container_logs(service_name: str, lines: int = 50) -> str:
         except Exception as e:
             return f"Error reading docker logs for {service_name}: {str(e)}"
     
+    # Try local service /logs endpoint if docker is unavailable (local startup mode)
+    local_port = LOCAL_PORTS.get(service_name)
+    if local_port:
+        try:
+            resp = requests.get(f"http://localhost:{local_port}/logs", timeout=1.0)
+            if resp.status_code == 200:
+                logger.info(f"Successfully scraped logs from local endpoint for {service_name}")
+                return resp.text
+        except Exception as e:
+            logger.warning(f"Could not fetch logs from local service {service_name} endpoint: {str(e)}")
+
     # Fallback/Mock for local testing
     logger.info("Docker logs fallback triggered.")
     if "payment" in service_name:

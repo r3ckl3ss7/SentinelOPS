@@ -267,11 +267,17 @@ export default function LandingPage() {
 
   // Icon map for alert types
   const alertIconMap: Record<string, string> = {
-    "HighMemoryUsage": "\ud83e\udde0",
-    "HighCpuUsage": "\u26a1",
-    "HttpErrorSpike": "\ud83d\udd25",
-    "DatabaseCorruptionAlert": "\ud83d\uddc4\ufe0f",
-    "LowPriorityWarning": "\u2699\ufe0f",
+    "HighMemoryUsage": "🧠",
+    "HighCpuUsage": "⚡",
+    "HttpErrorSpike": "🔥",
+    "DatabaseCorruptionAlert": "🗄️",
+    "LowPriorityWarning": "⚙️",
+    "DependencyFailure": "🔌",
+    "DatabaseSaturation": "🗄️",
+    "NetworkPartition": "🌐",
+    "CascadingFailure": "🌊",
+    "ConfigurationDrift": "⚙️",
+    "CertificateExpiration": "🔑",
   };
 
   // Human-readable names for alert types
@@ -281,6 +287,12 @@ export default function LandingPage() {
     "HttpErrorSpike": "HTTP 500 Storm",
     "DatabaseCorruptionAlert": "DB Corruption",
     "LowPriorityWarning": "Low Priority Warning",
+    "DependencyFailure": "Dependency Failure",
+    "DatabaseSaturation": "Database Saturation",
+    "NetworkPartition": "Network Partition",
+    "CascadingFailure": "Cascading Failure",
+    "ConfigurationDrift": "Configuration Drift",
+    "CertificateExpiration": "Certificate Expiration",
   };
 
   const scenario = SCENARIOS[activeScenario];
