@@ -44,9 +44,9 @@ cd ..
 echo [+] Next.js dev server is starting...
 echo ==========================================================
 echo  SETUP COMPLETE!
-echo  -> SRE Backend API: http://localhost:8000
-echo  -> SRE Dashboard: http://localhost:3000
-echo  -> Ensure Ollama is running and has qwen2.5:3b pulled:
+echo  -^> SRE Backend API: http://localhost:8000
+echo  -^> SRE Dashboard: http://localhost:3000
+echo  -^> Ensure Ollama is running and has qwen2.5:3b pulled:
 echo     ollama pull qwen2.5:3b
 echo ==========================================================
 pause

@@ -258,6 +258,7 @@ export default function DashboardPage() {
   const [filterActive, setFilterActive] = useState(false);
 
   const consoleRef = useRef<HTMLDivElement>(null);
+  const prevIncidentIdRef = useRef<string | null>(null);
 
   const handleTelemetryUpdate = (data: Record<string, ServiceMetric>) => {
     setServices(data);
@@ -430,9 +431,22 @@ export default function DashboardPage() {
   // Auto-scroll logs terminal container only (does not scroll the main window)
   useEffect(() => {
     if (consoleRef.current) {
-      consoleRef.current.scrollTop = consoleRef.current.scrollHeight;
+      const container = consoleRef.current;
+      const incidentChanged = prevIncidentIdRef.current !== selectedIncidentId;
+      
+      if (incidentChanged) {
+        // If the incident has changed, scroll to the bottom unconditionally
+        container.scrollTop = container.scrollHeight;
+        prevIncidentIdRef.current = selectedIncidentId;
+      } else {
+        // Only auto-scroll if the user is already near the bottom (threshold of 100px)
+        const isNearBottom = container.scrollHeight - container.scrollTop - container.clientHeight <= 100;
+        if (isNearBottom) {
+          container.scrollTop = container.scrollHeight;
+        }
+      }
     }
-  }, [logs]);
+  }, [logs, selectedIncidentId]);
 
   // Trigger a simulated test incident for risk classification testing
   const triggerTestIncident = async (riskLevel: string) => {
@@ -1039,7 +1053,7 @@ export default function DashboardPage() {
               </div>
 
               {/* Console Output */}
-              <div ref={consoleRef} className="flex-grow bg-[#0c1020] rounded-xl p-4 font-mono text-[11px] overflow-y-auto flex flex-col space-y-2 relative shadow-inner">
+              <div ref={consoleRef} className="flex-grow bg-[#0c1020] rounded-xl p-4 font-mono text-[11px] overflow-y-auto overscroll-contain flex flex-col space-y-2 relative shadow-inner">
                 {logs.length === 0 ? (
                   <div className="h-full flex items-center justify-center text-slate-500 text-center italic">
                     Idle... select an incident to stream agent timeline.

@@ -445,7 +445,7 @@ export default function LandingPage() {
               <div className="w-10"></div>
             </div>
 
-            <div className="p-4 bg-slate-950 font-mono text-xs text-slate-300 space-y-2 h-[340px] overflow-y-auto select-none scrollbar-thin">
+            <div className="p-4 bg-slate-950 font-mono text-xs text-slate-300 space-y-2 h-[340px] overflow-y-auto overscroll-contain select-none scrollbar-thin">
               <div className="text-slate-500">// Booting SentinelOps AI Agent Core ...</div>
               <div className="flex items-center space-x-1">
                 <span className="text-emerald-500">✓</span>
@@ -626,7 +626,7 @@ export default function LandingPage() {
               </div>
             </div>
 
-            <div className="flex-1 p-5 font-mono text-[11px] leading-relaxed space-y-3 text-left overflow-y-auto max-h-[450px] lg:max-h-none scrollbar-thin bg-[#0c1020] text-slate-300 shadow-inner">
+            <div className="flex-1 p-5 font-mono text-[11px] leading-relaxed space-y-3 text-left overflow-y-auto overscroll-contain max-h-[450px] lg:max-h-none scrollbar-thin bg-[#0c1020] text-slate-300 shadow-inner">
               {typedLogs.map((log, idx) => {
                 let textClass = "text-slate-300";
                 if (log.includes("ALERT")) textClass = "text-red-400 font-bold animate-pulse";
